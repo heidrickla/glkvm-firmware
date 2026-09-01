@@ -520,6 +520,57 @@ REST API returns **200 unauthenticated** where it returned 401 all session
 (`/api/info`, `/api/atx`). Applies to the web UI, the API, and VNC's VeNCrypt
 path. Revert by deleting that block and restarting kvmd.
 
+### ⭐ Route 4 RESOLVED — use Redfish, not IPMI
+
+**kvmd already implements Redfish, the industry successor to IPMI, and it works
+where IPMI does not.** Verified live on `.15`:
+
+```
+GET  /redfish/v1                      -> ServiceRoot, RedfishVersion 1.6.0
+GET  /redfish/v1/Systems              -> 1 member
+GET  /redfish/v1/Systems/0            -> PowerState: Off
+POST .../Actions/ComputerSystem.Reset -> validates ResetType, rejects bad input
+```
+
+Reachable from another host on the LAN. No RAKP handshake, no `pyghmi`, no
+UDP — plain HTTPS/JSON.
+
+**It is strictly better than the IPMI path:**
+
+| | IPMI (`kvmd-ipmi`) | Redfish |
+| --- | --- | --- |
+| Works here | no — flaky, three different errors per run | **yes** |
+| Power actions | 4 | **6** |
+| Extra dependency | `pyghmi` via pip | none — already in kvmd |
+| Transport | UDP 623 + RAKP | HTTPS |
+| Protocol security | leaks a password hash pre-auth by design | normal TLS + kvmd auth |
+
+Actions (`api/redfish.py:58-63`): `On`, `ForceOff`, `GracefulShutdown`,
+`ForceRestart`, `ForceOn`, `PushPowerButton` — note IPMI had no graceful/forced
+distinction.
+
+Example:
+
+```sh
+curl -sk https://<ip>/redfish/v1/Systems/0 | jq -r .PowerState
+curl -sk -X POST -H 'Content-Type: application/json' \
+     -d '{"ResetType":"GracefulShutdown"}' \
+     https://<ip>/redfish/v1/Systems/0/Actions/ComputerSystem.Reset
+```
+
+Tooling: `redfishtool`, Ansible `community.general.redfish_command`, and most
+modern DC automation speak Redfish natively.
+
+**`kvmd-ipmi` has been disabled** (gate file removed; the init script is kept,
+so re-enabling is one `touch`). Upstream kvmd 4.213 was checked first — it uses
+**the same pyghmi** with only cosmetic changes, so there was no fix to backport.
+
+⚠ **SECURITY, given passwordless is on:** `kvmd.auth.enabled: false` means these
+Redfish calls need **no credentials**. Anyone on the LAN can read power state
+and power-cycle the attached machine. That is the direct consequence of route 5,
+and it is worth deciding on deliberately — either keep the egress/segment
+controls tight, or re-enable auth now that the credential is vaulted and in sync.
+
 ### Route 4 — IPMI — ⚠ REVISED: UNRELIABLE
 
 **The earlier "working" claim does not hold up.** With `pyghmi` installed the
