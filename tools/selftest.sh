@@ -212,6 +212,30 @@ else
     fail "apply-module.sh no longer strips absolute paths - the junk-tree bug can recur"
 fi
 
+# The executable bit must be recorded IN GIT, not just on this filesystem.
+#
+# This repo is authored on Windows, where chmod +x does not reach git's index.
+# Every tools/*.sh was committed 100644, so on a Linux CI runner the very first
+# command -- ./tools/selftest.sh -- was "Permission denied". Six CI runs failed
+# that way, each producing no output at all, which looked like a broken runner
+# and was entirely this repo's doing.
+#
+# Fix is `git update-index --chmod=+x <file>`. Checked here so it cannot recur.
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    NOEXEC=$(git -C "$ROOT" ls-files -s tools/ 2>/dev/null \
+             | awk '$1 == "100644" { print $4 }' \
+             | grep -E '\.(sh|py)$|/S99' || true)
+    if [ -n "$NOEXEC" ]; then
+        fail "these are committed WITHOUT the executable bit - CI cannot run them:"
+        printf '%s\n' "$NOEXEC" | sed 's/^/          /'
+        printf '          fix: git update-index --chmod=+x <file>\n'
+    else
+        pass "every script under tools/ carries the exec bit in git"
+    fi
+else
+    skip "not a git checkout - exec bits NOT verified"
+fi
+
 # ssh inside a read loop must not eat stdin.
 if grep -q 'ssh -n ' "$HERE/drift.sh" 2>/dev/null; then
     pass "drift.sh uses ssh -n (will not swallow its own loop input)"
