@@ -520,7 +520,35 @@ REST API returns **200 unauthenticated** where it returned 401 all session
 (`/api/info`, `/api/atx`). Applies to the web UI, the API, and VNC's VeNCrypt
 path. Revert by deleting that block and restarting kvmd.
 
-### Route 4 — IPMI
+### Route 4 — IPMI — ⚠ REVISED: UNRELIABLE
+
+**The earlier "working" claim does not hold up.** With `pyghmi` installed the
+daemon starts and binds udp/623, but does not serve dependably: the same
+`ipmitool` command returns three different failures across consecutive runs —
+`no response from RAKP 1`, `Unable to establish IPMI v2 / RMCP+ session`, and
+`Set Session Privilege Level to ADMINISTRATOR failed` (the last meaning RAKP
+*succeeded* and only privilege escalation failed). The daemon logs nothing for
+any of them, including when run in the foreground.
+
+Two things muddied the original result:
+
+1. **An orphaned instance was squatting the port.** `ps w | grep kvmd-ipmi`
+   reported nothing while `netstat` showed `3620/python` on udp/623 — busybox
+   `ps` truncates the command column, so every `ps`-based check missed it.
+2. **The daemon had loaded the ORIGINAL template credentials** and kept serving
+   from memory after `ipmipasswd` was rewritten underneath it without a restart.
+   The reboot was the first time it ever loaded a real credential.
+
+Ruled out: firewall (INPUT policy ACCEPT, nothing on 623), `bindv6only` (0),
+malformed `ipmipasswd` (exactly 1 active entry, parses cleanly), password
+charset/length (20 chars printable ASCII, inside IPMI's 20-byte limit), and
+duplicate listeners (exactly one after cleanup).
+
+**Recommendation: leave IPMI off unless you have existing IPMI tooling to point
+at these units.** It buys only ATX power control, which the REST API and both
+web UIs already provide — the same conclusion reached before it was enabled.
+
+### Route 4 — IPMI (as originally recorded)
 
 `pip install pyghmi` on-device fixed the `ModuleNotFoundError` that made
 `kvmd-ipmi` unstartable. **Note pip also upgraded `cffi` 1.16.0 → 2.1.1 and
