@@ -1,0 +1,103 @@
+#!/bin/sh
+
+DAEMON="/usr/bin/tailscaled"
+CONFIG_DIR="/etc/kvmd/user/tailscale"
+CONFIG_FILE="$CONFIG_DIR.json"
+ARGS="-statedir $CONFIG_DIR"
+PIDFILE="/var/run/tailscaled.pid"
+
+start() {
+    printf 'Starting tailscale: '
+    [ -d "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR"
+    
+    # Check if config file exists, if not then don't start
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "DISABLED (config file not found)"
+        return 0
+    fi
+    
+    # Use jq to properly parse JSON config file
+    if [ -x "$(command -v jq)" ]; then
+        # Parse JSON file using jq
+        ENABLED=$(jq -r '.enable // false' "$CONFIG_FILE")
+        if [ "$ENABLED" != "true" ]; then
+            echo "DISABLED"
+            return 0
+        fi
+    else
+        # If jq is not available, fall back to basic parsing
+        ENABLED=$(grep -o '"enable"[[:space:]]*:[[:space:]]*true' "$CONFIG_FILE" | wc -l)
+        if [ "$ENABLED" -eq 0 ]; then
+            echo "DISABLED"
+            return 0
+        fi
+    fi
+    
+    if [ "$(cat /proc/gl-hw-info/model 2>/dev/null)" = "rm2" ]; then
+        # Reduce Go runtime memory usage
+        export GOGC=50
+        export GOMEMLIMIT=32MiB
+    fi
+
+    start-stop-daemon -S -b -m -p $PIDFILE -x $DAEMON -- $ARGS
+    if [ $? = 0 ]; then
+        echo "OK"
+        if [ "$(cat /proc/gl-hw-info/model 2>/dev/null)" = "rm2" ]; then
+            # Enable IP forwarding for tailscale networking
+            if [ ! -n "$(grep '^net\.ipv4\.ip_forward' /etc/sysctl.conf)" ]; then
+                echo 'net.ipv4.ip_forward = 1' >> /etc/sysctl.conf
+            fi
+            sysctl -p /etc/sysctl.conf
+        else
+            # Set tailscale configuration after successful start
+            # Check and add ip_forward settings if not already present
+            if [ ! -n "$(grep '^net\.ipv4\.ip_forward' /etc/sysctl.conf)" ]; then
+                echo 'net.ipv4.ip_forward = 1' >> /etc/sysctl.conf
+            fi
+            if [ ! -n "$(grep '^net\.ipv6\.conf\.all\.forwarding' /etc/sysctl.conf)" ]; then
+                echo 'net.ipv6.conf.all.forwarding = 1' >> /etc/sysctl.conf
+            fi
+            # Allow accepting RA even when forwarding is enabled (to get IPv6 address via SLAAC)
+            if [ ! -n "$(grep '^net\.ipv6\.conf\.all\.accept_ra' /etc/sysctl.conf)" ]; then
+                echo 'net.ipv6.conf.all.accept_ra = 2' >> /etc/sysctl.conf
+            fi
+            sysctl -p /etc/sysctl.conf
+
+            # setup iptables
+            iptables -t nat -A POSTROUTING -s 100.64.0.0/10 -o eth0 -j MASQUERADE
+        fi
+
+	tailscale set --accept-dns=false
+    else
+        echo "FAIL"
+    fi
+}
+
+stop() {
+    printf 'Stopping tailscale: '
+    start-stop-daemon -K -p $PIDFILE
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

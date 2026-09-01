@@ -1,0 +1,37 @@
+#!/bin/sh
+
+[ -e /usr/bin/gl-cloud ] || exit 1
+
+case "$1" in
+	start)
+		[ -e /etc/glinet/gl-cloud.conf ] || exit 1
+		enable=$(jq '.enable' /etc/glinet/gl-cloud.conf)
+		[ "$enable" != "true" ] && exit 1
+		printf "Starting gl-cloud: "
+		start-stop-daemon -S -b --pidfile /var/run/cloud_status.pid --make-pidfile -x /bin/sh /usr/bin/check_cloud_status.sh --pidfile /var/run/cloud_status.pid
+		start-stop-daemon -S -b --pidfile /var/run/gl-cloud.pid --make-pidfile -x /usr/bin/eco /usr/bin/gl-cloud
+
+		[ $? = 0 ] && echo "OK" || echo "FAIL"
+		;;
+	stop)
+		printf "Stopping gl-cloud: "
+		/usr/bin/gl_aw stop
+		start-stop-daemon --stop --quiet --pidfile /var/run/cloud_status.pid
+		start-stop-daemon --stop --quiet --pidfile /var/run/gl-cloud.pid
+		pid=$(pgrep gl-p2p-daemon)
+		[ -n "$pid" ] && kill $pid 2>/dev/null
+		rm -rf /var/run/cloud/
+		rm /var/run/cloud_status.pid 2>/dev/null
+		rm /var/run/gl-cloud.pid 2>/dev/null
+		[ $? = 0 ] && echo "OK" || echo "FAIL"
+		;;
+	restart|reload)
+		$0 stop
+		$0 start
+		;;
+	*)
+		echo "Usage: "${0}d" {start|stop|restart}"
+		exit 1
+esac
+
+exit 0

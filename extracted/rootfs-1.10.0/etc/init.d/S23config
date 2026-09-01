@@ -1,0 +1,95 @@
+#!/bin/sh
+set -x
+
+BACKUP_DIR="/userdata/backup_config/"
+BACKUP_PASSWORD_FILE="shadow"
+BACKUP_CONFIG="user"
+BACKUP_GL="glinet"
+BACKUP_OVERRIDE="override.yaml"
+BACKUP_TIMEZONE="localtime"
+BACKUP_SSH=".ssh"
+BACKUP_HOSTNAME="hostname"
+BACKUP_DROPBEAR="dropbear"
+BACKUP_CHANNEL="channel.conf"
+PASSWORD_FILE="/etc/shadow"
+PASSWORD_CONFIG="/etc/kvmd/user"
+DROPBEAR_CONFIG="/etc/dropbear"
+GL_CONFIG="/etc/glinet"
+OVERRIDE_CONFIG="/etc/kvmd/override.yaml"
+TIMEZONE_CONFIG="/etc/localtime"
+SSH_CONFIG="/root/.ssh"
+HOSTNAME_CONFIG="/etc/hostname"
+CHANNEL_CONFIG="/etc/kvmd/channel.conf"
+
+start() {
+    if [ -e "$BACKUP_DIR" ];then
+        cp -rf $BACKUP_DIR$BACKUP_PASSWORD_FILE $PASSWORD_FILE
+        cp -rf $BACKUP_DIR${BACKUP_CONFIG}/* $PASSWORD_CONFIG
+        cp -rf $BACKUP_DIR${BACKUP_GL}/* $GL_CONFIG
+        cp -rf $BACKUP_DIR${BACKUP_OVERRIDE} $OVERRIDE_CONFIG
+        cp -rf $BACKUP_DIR${BACKUP_HOSTNAME} $HOSTNAME_CONFIG
+        if [ "$(cat /proc/gl-hw-info/model)" = "rm4pe" ]; then
+            cp -rf $BACKUP_DIR${BACKUP_CHANNEL} $CHANNEL_CONFIG
+        fi
+
+        # dropbear config
+        if [ -L /etc/dropbear \
+            -a "$(readlink /etc/dropbear)" = "/var/run/dropbear" ]
+        then
+            if rm -f /etc/dropbear >/dev/null 2>&1; then
+                mkdir -p /etc/dropbear
+            else
+                echo "No persistent location to store SSH host keys. New keys will be"
+                echo "generated at each boot. Are you sure this is what you want to do?"
+                mkdir -p "$(readlink /etc/dropbear)"
+            fi
+        fi
+        cp -rf $BACKUP_DIR${BACKUP_DROPBEAR}/* $DROPBEAR_CONFIG
+        chmod 600 $DROPBEAR_CONFIG/* 2>/dev/null || true
+
+        # ssh config
+        if [ -d "$BACKUP_DIR$BACKUP_SSH" ]; then
+            mkdir -p $SSH_CONFIG
+            cp -rf $BACKUP_DIR${BACKUP_SSH}/* $SSH_CONFIG
+            chmod 700 $SSH_CONFIG
+            chmod 600 $SSH_CONFIG/* 2>/dev/null || true
+        fi
+        
+        # timezone
+        if [ -L "$BACKUP_DIR$BACKUP_TIMEZONE" ]; then
+            localtime_target=$(readlink "$BACKUP_DIR$BACKUP_TIMEZONE")
+            if [ -n "$localtime_target" ] && [ -e "$localtime_target" ]; then
+                ln -sf "$localtime_target" $TIMEZONE_CONFIG
+            fi
+        fi
+        
+        rm -rf $BACKUP_DIR
+    fi
+    /bin/hostname -F /etc/hostname
+}
+
+stop() {
+    echo
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

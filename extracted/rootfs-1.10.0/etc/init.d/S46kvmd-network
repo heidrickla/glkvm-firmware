@@ -1,0 +1,120 @@
+#!/bin/sh
+# This script is at S46 because it must start after S45connman, but before services that depend on the IP address, such as S80mDNSResponder/S50avahi-daemon
+NETWORK_CONFIG="/etc/kvmd/user/network.json"
+
+# Get the ethernet service ID
+get_ethernet_service_id() {
+    connmanctl services | grep ethernet | awk -F' ' '{print $3}' | head -n1
+}
+
+# Apply the network configuration
+apply_network_config() {
+    if [ ! -f "$NETWORK_CONFIG" ]; then
+        echo "Network config file not found: $NETWORK_CONFIG"
+        return 0
+    fi
+    
+    echo "Applying saved network configuration..."
+    
+    # Get the ethernet service ID
+    SERVICE_ID=$(get_ethernet_service_id)
+    if [ -z "$SERVICE_ID" ]; then
+        echo "Error: Cannot find ethernet service"
+        return 1
+    fi
+    
+    echo "Found ethernet service: $SERVICE_ID"
+    
+    # Parse the JSON config file with jq
+    MODE=$(jq -r '.mode // "dhcp"' "$NETWORK_CONFIG" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to parse JSON config file"
+        return 1
+    fi
+    
+    echo "Applying network mode: $MODE"
+    
+    if [ "$MODE" = "static" ]; then
+        # Get the static IP configuration parameters
+        IP_ADDRESS=$(jq -r '.ip_address // empty' "$NETWORK_CONFIG")
+        NETMASK=$(jq -r '.netmask // empty' "$NETWORK_CONFIG")
+        GATEWAY=$(jq -r '.gateway // empty' "$NETWORK_CONFIG")
+        
+        if [ -z "$IP_ADDRESS" ] || [ -z "$NETMASK" ] || [ -z "$GATEWAY" ]; then
+            echo "Error: Missing static IP parameters"
+            return 1
+        fi
+        
+        # Apply the static IP configuration
+        echo "Setting static IP: $IP_ADDRESS/$NETMASK, gateway: $GATEWAY"
+        if ! connmanctl config "$SERVICE_ID" --ipv4 manual "$IP_ADDRESS" "$NETMASK" "$GATEWAY"; then
+            echo "Error: Failed to set static IP"
+            return 1
+        fi
+        echo "Successfully set static IP"
+    else
+        # Apply the DHCP configuration
+        echo "Setting DHCP mode"
+        if ! connmanctl config "$SERVICE_ID" --ipv4 dhcp; then
+            echo "Error: Failed to set DHCP mode"
+            return 1
+        fi
+        echo "Successfully set DHCP mode"
+    fi
+    
+    # Handle the DNS configuration
+    DNS_SERVERS=$(jq -r '.dns_servers[]? // empty' "$NETWORK_CONFIG" 2>/dev/null | tr '\n' ' ')
+    USE_DHCP_DNS=$(jq -r '.use_dhcp_dns // false' "$NETWORK_CONFIG" 2>/dev/null)
+    
+    if [ -n "$DNS_SERVERS" ]; then
+        # Configure the specified DNS servers
+        echo "Setting DNS servers: $DNS_SERVERS"
+        if ! connmanctl config "$SERVICE_ID" nameservers $DNS_SERVERS; then
+            echo "Error: Failed to set DNS servers"
+            return 1
+        fi
+        echo "Successfully set DNS servers"
+    elif [ "$USE_DHCP_DNS" = "true" ]; then
+        # Use the DNS provided by DHCP
+        echo "Setting DHCP DNS"
+        if ! connmanctl config "$SERVICE_ID" nameservers; then
+            echo "Error: Failed to set DHCP DNS"
+            return 1
+        fi
+        echo "Successfully set DHCP DNS"
+    fi
+    
+    echo "Network configuration applied successfully"
+    return 0
+}
+
+start() {
+    # Apply the saved network configuration
+    apply_network_config
+}
+
+stop() {
+    echo
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $? 

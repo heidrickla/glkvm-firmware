@@ -1,0 +1,46 @@
+{
+  "package-file": {
+    "file_offset": 291252,
+    "size": 812
+  },
+  "bootloader": {
+    "file_offset": 293300,
+    "size": 289102
+  },
+  "parameter": {
+    "file_offset": 584116,
+    "size": 557
+  },
+  "uboot": {
+    "file_offset": 586164,
+    "size": 4194304
+  },
+  "misc": {
+    "file_offset": 4780468,
+    "size": 49152
+  },
+  "boot": {
+    "file_offset": 4829620,
+    "size": 8685568
+  },
+  "recovery": {
+    "file_offset": 13515188,
+    "size": 17044480
+  },
+  "rootfs": {
+    "file_offset": 30560692,
+    "size": 147599360
+  },
+  "oem": {
+    "file_offset": 178160052,
+    "size": 6291456
+  },
+  "userdata": {
+    "file_offset": 184451508,
+    "size": 5242880
+  },
+  "backup": {
+    "file_offset": 289204,
+    "size": 0
+  }
+}

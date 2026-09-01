@@ -1,0 +1,35 @@
+#!/bin/sh
+
+TIMESTAMP_FILE="/userdata/timestamp"
+
+start() {
+    if [ -f "$TIMESTAMP_FILE" ]; then
+        date -s "$(cat $TIMESTAMP_FILE)" > /dev/null 2>&1
+        echo "fakehwclock: restored time from $TIMESTAMP_FILE"
+    else
+        echo "fakehwclock: no saved timestamp found, skipping restore"
+    fi
+}
+
+stop() {
+    date "+%Y-%m-%d %H:%M:%S" > "$TIMESTAMP_FILE"
+    echo "fakehwclock: saved time to $TIMESTAMP_FILE"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

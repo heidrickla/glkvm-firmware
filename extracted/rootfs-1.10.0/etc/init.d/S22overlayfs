@@ -1,0 +1,40 @@
+#!/bin/sh
+function overlay_mount(){
+	mkdir -p /userdata/overlay/upper
+	mkdir -p /userdata/overlay/work
+	chmod 0755 /userdata/overlay/upper
+	chmod 0755 /userdata/overlay/work
+	mount -o noatime,lowerdir=/,upperdir=/userdata/overlay/upper,workdir=/userdata/overlay/work -t overlay "overlay:/overlay" /mnt
+	pivot_root  /mnt  /mnt/rom
+	mount -o noatime,move /rom/tmp /tmp
+	mount -o noatime,move /rom/run /run
+	mount -o noatime,move /rom/proc /proc
+	mount -o noatime,move /rom/dev /dev
+	mount -o noatime,move /rom/dev/pts /dev/pts
+	mount -o noatime,move /rom/dev/shm /dev/shm
+	mount -o noatime,move /rom/sys /sys
+	mount -o noatime,move /rom/sys/kernel/config /sys/kernel/config
+	mount -o noatime,move /rom/sys/kernel/debug /sys/kernel/debug
+	mount -o noatime,move /rom/sys/fs/pstore /sys/fs/pstore
+	mount -o noatime,move /rom/oem /oem
+	mount -o noatime,move /rom/userdata /userdata
+}
+
+case "$1" in
+	start|"")
+		overlay_mount
+		;;
+	restart|reload|force-reload)
+		echo "Error: argument '$1' not supported" >&2
+		exit 3
+		;;
+	stop|status)
+		# No-op
+		;;
+	*)
+		echo "Usage: start" >&2
+		exit 3
+		;;
+esac
+
+:

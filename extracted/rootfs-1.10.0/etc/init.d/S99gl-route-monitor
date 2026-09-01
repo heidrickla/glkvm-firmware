@@ -1,0 +1,74 @@
+#!/bin/sh
+
+DAEMON="/usr/sbin/gl-route-monitor"
+PIDFILE="/var/run/gl-route-monitor.pid"
+
+DEVICE_MODEL=$(cat /proc/gl-hw-info/model 2>/dev/null)
+
+DEVICE_LIST="rm10 rm10rc"
+
+device_has_multi_ifaces()
+{
+    local ret
+    for item in $DEVICE_LIST; do
+        if [ "$item" = "$DEVICE_MODEL" ]; then
+            ret=1
+        break
+    fi
+    done
+    echo $ret
+
+}
+
+start() {
+    if [ -n "$(device_has_multi_ifaces)" ]; then
+        printf 'Starting %s: ' "$DAEMON"
+        start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"
+        status=$?
+        if [ "$status" -eq 0 ]; then
+            echo "OK"
+        else
+            echo "FAIL"
+        fi
+        return "$status"
+    fi
+}
+
+stop() {
+    if [ -n "$(device_has_multi_ifaces)" ]; then
+        printf 'Stopping %s: ' "$DAEMON"
+        start-stop-daemon -K -p "$PIDFILE"
+        status=$?
+        if [ "$status" -eq 0 ]; then
+            rm -f "$PIDFILE"
+            echo "OK"
+        else
+            echo "FAIL"
+        fi
+        return "$status"
+    fi
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?
+

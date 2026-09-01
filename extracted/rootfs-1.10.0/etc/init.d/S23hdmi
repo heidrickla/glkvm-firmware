@@ -1,0 +1,271 @@
+#!/bin/sh
+
+EDID_FILE="/usr/share/hdmi_edid/2k60.bin"
+EDID1K_FILE="/usr/share/hdmi_edid/1k60.bin"
+EDID_UPDATED_FLAG="/etc/kvmd/user/edid_updated"
+HTTP_EDID_SAVE_PATH="/etc/kvmd/user/edid.txt"
+HTTP_EDID_BIN_PATH="/etc/kvmd/user/edid.bin"
+LT6911C_FIRMWARE_FILE="/usr/share/hdmi_firmware/v3.bin"
+LT6911C_EXPECTED_VERSION="49.25.3.3.1"
+LT6911C_TOOL="lt6911c_upgrade"
+GSV1127X_FIRMWARE_FILE="/usr/share/hdmi_firmware/v1.4.bin"
+GSV1127X_EXPECTED_VERSION="1.4"
+GSV1127X_TOOL="gsv1127x_upgrade"
+GSV1127_FIRMWARE_FILE="/usr/share/typec_firmware/gsv1127v1.3.bin"
+GSV1127_EXPECTED_VERSION="1.3"
+GSV2705_FIRMWARE_FILE="/usr/share/hdmi_firmware/gsv2705v1.1.bin"
+GSV2705_EXPECTED_VERSION="1.1"
+# GSV2705_TOOL="gsv1127x_upgrade"
+
+HDMIPATH=$(cat /proc/gl-hw-info/hdmipatch 2>/dev/null)
+DEVICES_PATH="/sys/bus/i2c/devices/$HDMIPATH"
+HDMI_NAME=$(cat /sys/bus/i2c/devices/"$HDMIPATH"/name 2>/dev/null  | awk '{$1=$1};1')
+CURRENT_VERSION=$(cat /sys/bus/i2c/devices/"$HDMIPATH"/version 2>/dev/null)
+
+# GSV2705 device path (i2c3, address 0x58 from dts)
+GSV2705_I2C_PATH="3-0058"
+GSV2705_DEVICES_PATH="/sys/bus/i2c/devices/$GSV2705_I2C_PATH"
+GSV2705_NAME=$(cat "$GSV2705_DEVICES_PATH/name" 2>/dev/null | awk '{$1=$1};1')
+GSV2705_CURRENT_VERSION=$(cat "$GSV2705_DEVICES_PATH/version" 2>/dev/null)
+
+NEED_REBOOT=0
+
+check_hdmi_device() {
+    case "$HDMI_NAME" in
+        "lt6911")
+            return 0
+            ;;
+        "gsv1127x")
+            return 1
+            ;;
+        "gsv1127")
+            return 2
+            ;;
+        "")
+            echo "error:devices name is null"
+            return 3
+            ;;
+        *)
+            echo "warning:unknow devices '$HDMI_NAME'"
+            return 3
+            ;;
+    esac
+}
+
+check_gsv2705_device() {
+    if [ "$GSV2705_NAME" = "gsv2705" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+check_hdmi_version() {
+    if [[ $# -lt 3 ]]; then
+        echo "error: need three param" >&2
+        return 1
+    fi
+
+    local TOOL="$1"
+    local EXPECTED_VERSION="$2"
+    local FIRMWARE_FILE="$3"
+
+    if [ "$CURRENT_VERSION" != "$EXPECTED_VERSION" ]; then
+        printf "Version mismatch, updating HDMI firmware...\n"
+        # $TOOL -d /dev/i2c-1 -f $FIRMWARE_FILE
+        case "$TOOL" in
+            "gsv1127x_upgrade")
+                # Operations specific to gsv1127x_upgrade; polling must be disabled first
+                echo 0 > $DEVICES_PATH/poll_interval_enable && sleep 1 && $TOOL -d /dev/i2c-1 -f $FIRMWARE_FILE
+                ;;
+            "lt6911c_upgrade")
+                # Operations specific to lt6911c_upgrade
+                # e.g. possibly different parameters or execution flow
+                $TOOL -d /dev/i2c-1 -f $FIRMWARE_FILE
+                ;;
+        esac
+
+        if [ $? -eq 0 ]; then
+            printf "Firmware update successful, rebooting...\n"
+            NEED_REBOOT=1
+            # sync
+            # reboot
+        else
+            printf "Firmware update failed\n"
+        fi
+    else
+        printf "HDMI firmware version is correct\n"
+    fi
+}
+
+check_gsv2705_version() {
+    if [ "$GSV2705_CURRENT_VERSION" != "$GSV2705_EXPECTED_VERSION" ]; then
+        printf "GSV2705 version mismatch (current: %s, expected: %s), updating firmware...\n" \
+            "$GSV2705_CURRENT_VERSION" "$GSV2705_EXPECTED_VERSION"
+        $GSV1127X_TOOL -d /dev/i2c-3 -f $GSV2705_FIRMWARE_FILE
+
+        if [ $? -eq 0 ]; then
+            printf "GSV2705 firmware update successful\n"
+            NEED_REBOOT=1
+        else
+            printf "GSV2705 firmware update failed\n"
+        fi
+    else
+        printf "GSV2705 firmware version is correct\n"
+    fi
+}
+
+check_typec_version() {
+    if [[ $# -lt 3 ]]; then
+        echo "error: need three param" >&2
+        return 1
+    fi
+
+    local TOOL="$1"
+    local EXPECTED_VERSION="$2"
+    local FIRMWARE_FILE="$3"
+
+    if [ "$CURRENT_VERSION" != "$EXPECTED_VERSION" ]; then
+        printf "Version mismatch, updating TYPE-C firmware...\n"
+        # $TOOL -d /dev/i2c-0 -f $FIRMWARE_FILE
+        case "$TOOL" in
+            "gsv1127x_upgrade")
+                # Operations specific to gsv1127x_upgrade; polling must be disabled first
+                $TOOL -d /dev/i2c-0 -f $FIRMWARE_FILE
+                ;;
+        esac
+
+        if [ $? -eq 0 ]; then
+            printf "Firmware update successful, rebooting...\n"
+            sync
+            reboot
+        else
+            printf "Firmware update failed\n"
+        fi
+    else
+        printf "TYPE-C firmware version is correct\n"
+    fi
+}
+
+hdmi_edid_update() {
+    if [[ $# -lt 1 ]]; then
+        echo "error: need one param" >&2
+        return 1
+    fi
+
+    local TOOL="$1"
+
+    # force update edid for first time
+    if [ ! -f "$EDID_UPDATED_FLAG" -o "`cat $EDID_UPDATED_FLAG`" != "2" ]; then
+        echo "Init state file not found, updating EDID..."
+        # $TOOL -d /dev/i2c-1 -e $EDID_FILE && sleep 1 && echo 1 > $DEVICES_PATH/reset
+        case "$TOOL" in
+            "lt6911c_upgrade")
+                # Operations specific to lt6911c_upgrade
+                $TOOL -d /dev/i2c-1 -e $EDID_FILE && sleep 1 && echo 1 > $DEVICES_PATH/reset
+                ;;
+            "gsv1127x_upgrade")
+                # Operations specific to gsv1127x_upgrade
+                # e.g. possibly different parameters or execution flow
+                echo 0 > $DEVICES_PATH/poll_interval_enable && sleep 1 && $TOOL -d /dev/i2c-1 -e $EDID1K_FILE && sleep 1 &&  echo 1 > $DEVICES_PATH/poll_interval_enable
+                ;;
+        esac
+
+        if [ $? -eq 0 ]; then
+            printf "EDID update successful\n"
+            echo 2 > $EDID_UPDATED_FLAG
+            rm $HTTP_EDID_SAVE_PATH
+            sync
+        else
+            echo "EDID update failed"
+        fi
+    else
+        case "$TOOL" in
+            "gsv1127x_upgrade")
+                # Operations specific to gsv1127x_upgrade; polling must be disabled first. The EDID info is kept in cache and must be set every time
+                # e.g. possibly different parameters or execution flow
+                if [ ! -f "$HTTP_EDID_SAVE_PATH" ]; then
+                    echo 0 > $DEVICES_PATH/poll_interval_enable && sleep 1 && $TOOL -d /dev/i2c-1 -e $EDID1K_FILE && sleep 1 &&  echo 1 > $DEVICES_PATH/poll_interval_enable
+                else
+                    cat $HTTP_EDID_SAVE_PATH | tr -d ' \t\n' | xxd -r -p > $HTTP_EDID_BIN_PATH
+                    echo 0 > $DEVICES_PATH/poll_interval_enable && sleep 1 && $TOOL -d /dev/i2c-1 -e $HTTP_EDID_BIN_PATH && sleep 1 &&  echo 1 > $DEVICES_PATH/poll_interval_enable
+                fi
+                ;;
+        esac
+    fi
+}
+
+do_reboot_if_needed() {
+    if [ "$NEED_REBOOT" -eq 1 ]; then
+        printf "Firmware updated, rebooting...\n"
+        sync
+        reboot
+    fi
+}
+
+start() {
+    printf "Starting hdmi/type-c: "
+    
+    check_hdmi_device
+    case $? in
+    0)
+        echo "LT6911 device..."
+        check_hdmi_version "$LT6911C_TOOL" "$LT6911C_EXPECTED_VERSION" "$LT6911C_FIRMWARE_FILE"
+        hdmi_edid_update "$LT6911C_TOOL"
+        ;;
+    1)
+        echo "GSV1127X device..."
+        check_hdmi_version "$GSV1127X_TOOL" "$GSV1127X_EXPECTED_VERSION" "$GSV1127X_FIRMWARE_FILE"
+        hdmi_edid_update "$GSV1127X_TOOL"
+        ;;
+    2)
+        echo "GSV1127 device..."
+        check_typec_version "$GSV1127X_TOOL" "$GSV1127_EXPECTED_VERSION" "$GSV1127_FIRMWARE_FILE"
+        ;;
+    3)
+        echo "check hdmi device error" >&2
+        # exit 1  # Terminate the script
+        ;;
+    esac
+
+    # Check and update GSV2705 firmware
+    check_gsv2705_device
+    if [ $? -eq 0 ]; then
+        echo "GSV2705 device found..."
+        check_gsv2705_version
+    else
+        echo "GSV2705 device not found, skipping..."
+    fi
+
+    # Reboot once after all firmware updates are done
+    do_reboot_if_needed
+
+    echo "OK"
+}
+
+stop() {
+    echo
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

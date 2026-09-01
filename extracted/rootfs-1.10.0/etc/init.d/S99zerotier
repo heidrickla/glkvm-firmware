@@ -1,0 +1,125 @@
+#!/bin/sh
+#
+# Start cloudflare tunnel service
+#
+
+DAEMON="zerotier-one"
+CONFIG_FILE="/etc/kvmd/user/zerotier.json"
+PIDFILE="/var/run/zerotier.pid"
+
+# 检查配置文件是否存在
+check_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Configuration file $CONFIG_FILE does not exist"
+        return 1
+    fi
+    
+    # 检查 jq 是否存在
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "jq command not found, unable to parse JSON configuration file"
+        return 1
+    fi
+    
+    # 使用 jq 解析 JSON 配置文件
+    ENABLE=$(jq -r '.enable' "$CONFIG_FILE" 2>/dev/null)
+    
+    # 检查 jq 解析是否成功
+    if [ $? -ne 0 ]; then
+        echo "JSON configuration file format error"
+        return 1
+    fi
+    
+    if [ "$ENABLE" != "true" ]; then
+        echo "ZeroTier not enabled (enable=$ENABLE)"
+        return 1
+    fi
+    
+    return 0
+}
+
+start() {
+    printf 'Starting %s: ' "$DAEMON"
+    
+    # 检查配置
+    if ! check_config; then
+        echo "SKIP"
+        return 0
+    fi
+    
+    # 检查 zerotier-one 是否存在
+    if ! command -v "$DAEMON" >/dev/null 2>&1; then
+        echo "FAIL (zerotier-one not found)"
+        return 1
+    fi
+    
+    # 创建 zerotier 目录和链接
+    ZEROTIER_DIR="/etc/kvmd/user/zerotier"
+    ZEROTIER_VAR_DIR="/var/lib/zerotier-one"
+    
+    # 如果 zerotier 目录不存在，创建它
+    if [ ! -d "$ZEROTIER_DIR" ]; then
+        mkdir -p "$ZEROTIER_DIR"
+    fi
+        
+    # 创建符号链接
+    ln -sf "$ZEROTIER_DIR" "$ZEROTIER_VAR_DIR" 2>/dev/null
+
+    
+    # 启动 zerotier-one
+    start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        echo "OK"
+        # Check and add ip_forward settings if not already present
+        if [ ! -n "$(grep '^net\.ipv4\.ip_forward' /etc/sysctl.conf)" ]; then
+            echo 'net.ipv4.ip_forward = 1' >> /etc/sysctl.conf
+        fi
+        if [ ! -n "$(grep '^net\.ipv6\.conf\.all\.forwarding' /etc/sysctl.conf)" ]; then
+            echo 'net.ipv6.conf.all.forwarding = 1' >> /etc/sysctl.conf
+        fi
+        # Allow accepting RA even when forwarding is enabled (to get IPv6 address via SLAAC)
+        if [ ! -n "$(grep '^net\.ipv6\.conf\.all\.accept_ra' /etc/sysctl.conf)" ]; then
+            echo 'net.ipv6.conf.all.accept_ra = 2' >> /etc/sysctl.conf
+        fi
+        sysctl -p /etc/sysctl.conf
+    else
+        echo "FAIL"
+    fi
+    return "$status"
+}
+
+stop() {
+    printf 'Stopping %s: ' "$DAEMON"
+    start-stop-daemon -K -p "$PIDFILE" -s 9 #kill -9
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        rm -f "$PIDFILE"
+        echo "OK"
+    else
+        echo "FAIL"
+    fi
+    return "$status"
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $? 

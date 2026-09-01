@@ -1,0 +1,80 @@
+#!/bin/sh
+
+DAEMON="/usr/sbin/led_event_controller"
+PIDFILE="/var/run/led_event_controller.pid"
+
+DEVICE_MODEL=$(cat /proc/gl-hw-info/model 2>/dev/null)
+
+DEVICE_LED="rm1 rm1pe rm1v2"
+
+device_has_led()
+{
+    local ret
+    for item in $DEVICE_LED; do
+        if [ "$item" = "$DEVICE_MODEL" ]; then
+            ret=1
+        break
+    fi
+    done
+    echo $ret
+
+}
+
+start() {
+    #rm1 has an LED, which may conflict with pins on other products
+    printf "Looking LED: "
+
+    if [ -n "$(device_has_led)" ]; then
+        printf 'Starting %s: ' "$DAEMON"
+        start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"
+        status=$?
+        if [ "$status" -eq 0 ]; then
+            echo "OK"
+        else
+            echo "FAIL"
+        fi
+        return "$status"
+    else
+        printf '%s not support' "$DEVICE_MODEL"
+
+        return 0
+    fi
+}
+
+stop() {
+    if [ -n "$(device_has_led)" ]; then
+        printf 'Stopping %s: ' "$DAEMON"
+        start-stop-daemon -K -p "$PIDFILE"
+        status=$?
+        if [ "$status" -eq 0 ]; then
+            rm -f "$PIDFILE"
+            echo "OK"
+        else
+            echo "FAIL"
+        fi
+        return "$status"
+    fi
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

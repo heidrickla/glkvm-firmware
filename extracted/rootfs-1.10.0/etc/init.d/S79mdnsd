@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Starts mdnsd
+#
+
+start() {
+	echo -n "Starting mdnsd: "
+	start-stop-daemon --start --quiet --pidfile /var/run/mdnsd.pid \
+                --exec /usr/sbin/mdnsd
+	if [ "$?" != "0" ] ; then
+		echo "FAIL"
+	else
+		echo "OK"
+	fi
+}
+stop() {
+	echo -n "Stopping mdnsd: "
+	start-stop-daemon --stop --quiet --pidfile /var/run/mdnsd.pid
+	if [ "$?" != "0" ] ; then
+		echo "FAIL"
+	else
+		echo "OK"
+	fi
+	rm /var/run/mdnsd.pid 2>/dev/null
+}
+
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+  start)
+  	start
+	;;
+  stop)
+  	stop
+	;;
+  restart|reload)
+  	restart
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?

@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# /etc/init.d/S99kvmd-ipmi  —  start kvmd's IPMI server on the GL-RM1.
+#
+# The RM1 ships /usr/bin/kvmd-ipmi (a Python entry-point wrapper around
+# kvmd.apps.ipmi) but NO init script for it, so it never runs. This supplies
+# the missing script, following the house style of /etc/init.d/S98kvmd
+# (start-stop-daemon + logger + pidfile) and the enable-gate style of
+# S99tailscale.
+#
+# Install:
+#   scp S99kvmd-ipmi root@<unit-ip>:/etc/init.d/
+#   ssh root@<unit-ip> "chmod +x /etc/init.d/S99kvmd-ipmi && touch $GATE"
+#   ssh root@<unit-ip> "/etc/init.d/S99kvmd-ipmi start"
+#
+# The gate file makes this opt-in: without it the script exits quietly, so a
+# reboot cannot surprise you with an unexpected listener.
+#
+# Remove: rm /etc/init.d/S99kvmd-ipmi  (and the gate file)
+
+DAEMON="/usr/bin/kvmd-ipmi"
+PIDFILE="/var/run/kvmd-ipmi.pid"
+GATE="/etc/kvmd/user/ipmi.enable"
+
+. /etc/profile
+
+start() {
+    printf "Starting kvmd-ipmi: "
+
+    if [ ! -f "$GATE" ]; then
+        echo "DISABLED (no $GATE)"
+        return 0
+    fi
+    if [ ! -x "$DAEMON" ]; then
+        echo "FAIL ($DAEMON missing)"
+        return 1
+    fi
+
+    start-stop-daemon --start --quiet --background --make-pidfile         --pidfile "$PIDFILE" --exec /bin/sh --         -c "exec $DAEMON 2>&1 | logger -t kvmd-ipmi -p daemon.debug"
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+    printf "Stopping kvmd-ipmi: "
+    start-stop-daemon --stop --quiet --pidfile "$PIDFILE" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    PIDS=$(pgrep -f '[k]vmd-ipmi')
+    [ -n "$PIDS" ] && kill $PIDS 2>/dev/null || true
+    if pgrep -f '[k]vmd-ipmi' >/dev/null; then echo "FAIL"; else echo "OK"; fi
+}
+
+status() {
+    printf "kvmd-ipmi status: "
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "running (pid: $(cat "$PIDFILE"))"; return 0
+    fi
+    [ -f "$GATE" ] && echo "stopped" || echo "disabled"
+    return 3
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart|reload) stop; start ;;
+    status)  status ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+
+exit $?

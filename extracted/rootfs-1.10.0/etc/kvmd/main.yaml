@@ -1,0 +1,79 @@
+# Don't touch this file otherwise your device may stop working.
+# Use override.yaml to modify required settings.
+# You can find a working configuration in /usr/share/kvmd/configs.default/kvmd.
+
+override: !include [override.d, user/boot.yaml, override.yaml]
+
+logging: !include logging.yaml
+
+kvmd:
+    auth: !include auth.yaml
+
+
+
+    hid:
+        type: otg
+        mouse_alt:
+            device: /dev/hidg2
+
+    atx:
+        type: glatx
+
+    msd:
+        type: otg
+
+    streamer:
+        h264_bitrate:
+            default: 2000
+        pre_start_cmd:
+            - "/bin/sh"
+            - "-c"
+            - "pkill -USR1 -f /usr/sbin/lt86102sxe_setup 2>/dev/null || true"
+        post_stop_cmd:
+            - "/bin/sh"
+            - "-c"
+            - "pkill -USR2 -f /usr/sbin/lt86102sxe_setup 2>/dev/null || true"
+        cmd:
+            - "/usr/bin/ustreamer"
+            - "--device=/dev/video0"
+            # - "-s 0.0.0.0"
+            - "-r 1920x1080"
+            - "--venc-format={video_format}"
+            - "--tcp-nodelay"
+            - "--vi-buffer-num=4"
+            - "--vi-format=4"
+            # - "--persistent"
+            # - "--dv-timings"
+            # - "--desired-fps={desired_fps}"
+            - "--unix={unix}"
+            - "--unix-rm"
+            - "--unix-mode=0660"
+            - "--exit-on-parent-death"
+            - "--process-name-prefix={process_name_prefix}"
+            - "--notify-parent"
+            # - "--no-log-colors"
+            - "--jpeg-sink=kvmd::ustreamer::jpeg"
+            - "--jpeg-sink-mode=0660"
+            - "--h264-sink=kvmd::ustreamer::h264"
+            - "--h264-sink-mode=0660"
+            - "--h264-bitrate={h264_bitrate}"
+            - "--h264-gop={h264_gop}"
+            - "--zero-delay={zero_delay}"
+            - "--venc-mode={venc_mode}"
+            # - "--rv1126-sink=kvmd::ustreamer::rv1126"
+            # - "--rv1126-sink-mode=0660"
+
+
+media:
+    memsink:
+        h264:
+            sink: "kvmd::ustreamer::h264"
+
+vnc:
+    memsink:
+        jpeg:
+            sink: "kvmd::ustreamer::jpeg"
+        h264:
+            sink: "kvmd::ustreamer::h264"
+        rv1126:
+            sink: "kvmd::ustreamer::rv1126"

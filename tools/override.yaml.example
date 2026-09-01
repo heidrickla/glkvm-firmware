@@ -1,0 +1,91 @@
+# ---------------------------------------------------------------------------
+# /etc/kvmd/override.yaml  —  GL-RM1
+#
+# Enables the VNC and IPMI servers, which already ship on the device but are
+# not exposed by GL.iNet's web UI.
+#
+# Everything below is verified against firmware 1.10.0 extracted from
+# glkvm-RM1-1.10.0-0710-1783648193.img — the device's real /etc/kvmd/main.yaml
+# and rootfs, not PiKVM's current docs (which describe 4.213; this is 4.82).
+# ---------------------------------------------------------------------------
+#
+# CONFIRMED — the override mechanism is live.
+#   The shipped /etc/kvmd/main.yaml begins with:
+#       override: !include [override.d, user/boot.yaml, override.yaml]
+#   so this file is merged after main.yaml and before validation. main.yaml
+#   itself says: "Don't touch this file [...] Use override.yaml to modify
+#   required settings."  This is the sanctioned route.
+#
+# CONFIRMED — the daemons exist but nothing starts them.
+#   /usr/bin/kvmd-vnc and /usr/bin/kvmd-ipmi are present (Python entry-point
+#   wrappers around kvmd.apps.{vnc,ipmi}); /usr/bin/ipmitool ships too.
+#   But /etc/init.d/ contains NO S99kvmd-vnc or S99kvmd-ipmi, so neither ever
+#   runs. Install the init scripts alongside this file:
+#       tools/S99kvmd-vnc   tools/S99kvmd-ipmi
+#   Each is gated on a flag file so a reboot cannot surprise you:
+#       touch /etc/kvmd/user/vnc.enable      (or ipmi.enable)
+#
+# RESOLVED — VNC video needs no memsink config from you.
+#   An earlier draft warned the memsink sinks were unknown. They are not:
+#   main.yaml already wires them.
+#       vnc:
+#           memsink:
+#               jpeg:   {sink: "kvmd::ustreamer::jpeg"}
+#               h264:   {sink: "kvmd::ustreamer::h264"}
+#               rv1126: {sink: "kvmd::ustreamer::rv1126"}
+#   So VNC gets hardware-encoded video from ustreamer out of the box. Do not
+#   redefine these unless you have a reason.
+#
+# WARNING on IPMI — the device's own /etc/kvmd/ipmipasswd says it plainly:
+#   "IPMI protocol is completely unsafe by design [...] the server sends a
+#   salted SHA1 or MD5 hash of the requested user's password to the client,
+#   prior to the client authenticating."
+#   Enable it only on a network you trust, and never reuse a password there.
+#
+# Apply:  copy to /etc/kvmd/override.yaml, then reboot (or restart kvmd).
+# Undo:   blank the file and reboot. Purely additive; main.yaml is untouched.
+# ---------------------------------------------------------------------------
+
+vnc:
+    desired_fps: 30
+    mouse_output: usb
+    keymap: /usr/share/kvmd/keymaps/en-us
+
+    server:
+        # "" binds all interfaces. Set the unit's LAN IP to narrow it.
+        host: ""
+        port: 5900
+        max_clients: 10
+
+    auth:
+        # VNC-native password auth. /etc/kvmd/vncpasswd ships with only
+        # comments — with no entries, VNCAuth stays disabled and clients must
+        # use VeNCrypt with KVMD credentials. Add an entry before flipping this.
+        vncauth:
+            enabled: false
+            file: /etc/kvmd/vncpasswd
+        # VeNCrypt (TLS) is on by default in this build.
+        vencrypt:
+            enabled: true
+
+ipmi:
+    server:
+        host: ""
+        port: 623
+        timeout: 10.0
+
+    auth:
+        # Ships with comments only — add a user before starting the daemon.
+        file: /etc/kvmd/ipmipasswd
+
+    # Serial-over-LAN. Leave device "" unless a UART is genuinely wired.
+    sol:
+        device: ""
+        speed: 115200
+        proxy_port: 0
+
+# ---------------------------------------------------------------------------
+# Verify from another machine:
+#   VNC :  vncviewer <unit-ip>:5900
+#   IPMI:  ipmitool -I lanplus -H <unit-ip> -U <user> -P <pass> power status
+# ---------------------------------------------------------------------------

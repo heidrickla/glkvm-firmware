@@ -1,0 +1,48 @@
+#!/bin/sh
+
+start() {
+    # Check if the /proc/gl-hw-info/model file exists
+    if [ ! -f /proc/gl-hw-info/device_mac ]; then
+        # Generate a random MAC address
+        # Use the GL-iNet OUI prefix
+        MAC="94:83:c4"
+        # Generate random values for the last three bytes
+        for i in $(seq 1 3); do
+            RAND=$(printf "%02x" $((RANDOM % 256)))
+            MAC="$MAC:$RAND"
+        done
+    else
+        # RM device detected; get the MAC address from the device_mac file
+        MAC=$(cat /proc/gl-hw-info/device_mac)
+        echo "RM device detected, using device MAC address: $MAC"
+    fi
+    
+    # Apply the MAC address to the eth0 interface
+    ip link set eth0 down
+    ip link set eth0 address $MAC
+    ip link set eth0 up
+    
+    echo "Configured eth0 MAC address: $MAC"
+}
+
+stop() {
+    echo "Nothing to stop"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit 0

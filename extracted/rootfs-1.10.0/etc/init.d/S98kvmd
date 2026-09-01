@@ -1,0 +1,78 @@
+#!/bin/sh
+
+DAEMON="/usr/bin/python3"
+DAEMON_ARGS="/usr/sbin/kvmd --run"
+PIDFILE="/var/run/kvmd.pid"
+
+. /etc/profile
+
+setup_dir(){
+    if [ ! -d /run/kvmd ]; then
+        mkdir /run/kvmd
+    fi
+}
+
+start() {
+    printf "Starting kvmd: "
+    touch /tmp/bitrate
+    start-stop-daemon --start --quiet --background --make-pidfile --pidfile $PIDFILE --exec /bin/sh -- -c "exec $DAEMON $DAEMON_ARGS 2>&1 | logger -t kvmd -p daemon.debug"
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+    printf "Stopping kvmd: "
+
+    PIDS=$(pgrep -f '[k]vmd/main')
+    if [ -n "$PIDS" ]; then
+        kill $PIDS 2>/dev/null || true
+    fi
+
+    start-stop-daemon --stop --quiet --pidfile $PIDFILE 2>/dev/null || true
+    rm -f $PIDFILE
+
+    if pgrep -f '[k]vmd/main' >/dev/null; then
+        echo "FAIL"
+    else
+        echo "OK"
+    fi
+}
+
+status() {
+    printf "kvmd status: "
+    if [ -f $PIDFILE ]; then
+        PID=$(cat $PIDFILE)
+        if kill -0 $PID 2>/dev/null; then
+            echo "running (pid: $PID)"
+            return 0
+        else
+            echo "stopped (stale pid file)"
+            return 1
+        fi
+    else
+        echo "stopped"
+        return 3
+    fi
+}
+
+case "$1" in
+    start)
+        setup_dir
+        /usr/sbin/kvmd-load-rockit-modules
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+esac
+
+exit $?

@@ -1,0 +1,60 @@
+#!/bin/sh
+
+DAEMON="/usr/bin/kvmd-otg"
+DAEMON_ARGS="start"
+DEAMON_ARGS_STOP="stop"
+PIDFILE="/var/run/kvmd-otg.pid"
+
+CONFIGFS_DIR=/sys/kernel/config
+# setup_env(){
+#     echo "Debug: setup_env"
+#     if ! grep -q "LABEL=PIMSD" /etc/fstab; then
+#         echo LABEL=PIMSD  /userdata/media  vfat  nodev,nosuid,noexec,rw,errors=remount-rw,X-kvmd.otgmsd-user=kvmd  0 2 >> /etc/fstab
+#     fi
+# }
+setup_configfs(){
+    echo "Debug: configfs_init"
+    if [ ! -d /dev/usb-ffs ]; then
+        mkdir /dev/usb-ffs
+    fi
+
+    if ! mountpoint -q ${CONFIGFS_DIR}; then
+        mount -t configfs none ${CONFIGFS_DIR}
+    fi
+
+    if [ ! -d /run/kvmd ]; then
+        mkdir /run/kvmd
+    fi
+}
+
+start() {
+    printf "Starting kvmd-otg: "
+    start-stop-daemon --start --quiet --background --make-pidfile --pidfile $PIDFILE --exec /bin/sh -- -c "exec $DAEMON $DAEMON_ARGS 2>&1 | logger -t kvmd-otg"
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+    printf "Stopping kvmd-otg: "
+    $DAEMON $DEAMON_ARGS_STOP
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+case "$1" in
+    start)
+        # setup_env
+        setup_configfs
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

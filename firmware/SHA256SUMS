@@ -1,0 +1,13 @@
+# GL-RM1 firmware images, fetched 2026-09-01 from https://fw.gl-inet.com/kvm/rm1/
+#
+# The two beta hashes below were VERIFIED against the vendor's own
+# testing/list-sha256.txt at download time. Both matched.
+# The release-channel image publishes no hash; its digest is recorded here so
+# future re-downloads can be compared against this one.
+#
+# verified (matches vendor list-sha256.txt):
+8a46739a36b4c8bc6b8f195697fca725dd291ee88793e68cc9dfbc2c9a75ba49 *glkvm-RM1-1.10.0-0710-1783648193.img
+6857bfc86cd850269bc8f6db12ffd707312c7161705e72bcad0c24889cd3f9d3 *glkvm-RM1-1.7.0-1107-1762486370.img
+#
+# recorded only (no vendor hash published for the release channel):
+32df0ec4073872620ee5d8c4f17af7cae47f7b269ec7ce2fe1d869e2a03e0d84 *glkvm-RM1-1.3.0-release-update.img

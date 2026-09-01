@@ -1,0 +1,43 @@
+#!/bin/sh
+
+DAEMON="/usr/bin/gl-pion"
+PIDFILE="/var/run/gl-pion.pid"
+STATUS_PIDFILE="/var/run/pion_status.pid"
+
+start() {
+    echo -n "Starting gl-pion:"
+    start-stop-daemon -S -b --pidfile $STATUS_PIDFILE --make-pidfile -x /bin/sh /usr/bin/check_pion_status.sh
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+    echo -n "Stopping gl-pion:"
+    killall gl-pion 2>/dev/null
+    start-stop-daemon --stop --quiet --pidfile $STATUS_PIDFILE
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+    rm $STATUS_PIDFILE 2>/dev/null
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit $?

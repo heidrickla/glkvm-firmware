@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# 持久化 logread 日志到 flash(/userdata/log)
+# 编号 S30 > S01logging:确保 syslogd 已起、内存环就绪后再抽水。
+#
+# 持续抽水(logpersistd)仅在 beta 版本运行:通过 /etc/version 的
+# RK_VERSION 字段判断,字段含 "beta"(忽略大小写)才启动,正式 release 跳过。
+# 关机时导出 last_boot.log 快照不受此限制,所有版本都会执行。
+#
+
+VERSION_FILE="/etc/version"
+
+is_beta() {
+	[ -r "$VERSION_FILE" ] || return 1
+	grep -i '^RK_VERSION=' "$VERSION_FILE" | grep -qi 'beta'
+}
+
+start() {
+	if ! is_beta; then
+		echo "logpersistd: not a beta build, skip"
+		return 0
+	fi
+	printf "Starting logpersistd: "
+	/usr/sbin/logpersistd &
+	echo "OK"
+}
+
+stop() {
+	printf "Stopping logpersistd: "
+	killall logpersistd 2>/dev/null
+	echo "OK"
+
+	# 关机时把当前 logread 环形缓冲区内容落盘,作为"上次启动"的日志快照。
+	# 不受 is_beta 限制,所有版本都保留,方便下次开机排查关机前的问题。
+	mkdir -p /userdata/log
+	logread > /userdata/log/last_boot.log 2>/dev/null
+	sync
+}
+
+case "$1" in
+  start)   start ;;
+  stop)    stop ;;
+  restart|reload) stop; start ;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?

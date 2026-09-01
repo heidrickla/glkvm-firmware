@@ -1,0 +1,69 @@
+#!/bin/sh
+
+start() {
+    for i in /etc/kvmd/user/scripts/S??* ;do
+        # Ignore dangling symlinks (if any).
+        [ ! -f "$i" ] && continue
+
+        case "$i" in
+        *.sh)
+            # Source shell script for speed.
+            (
+            trap - INT QUIT TSTP
+            set start
+            . $i
+            )
+            ;;
+        *)
+            # No sh extension, so fork subprocess.
+            $i start
+            ;;
+        esac
+    done
+}
+
+stop() {
+    for i in $(ls -r /etc/kvmd/user/scripts/S??*) ;do
+
+        # Ignore dangling symlinks (if any).
+        [ ! -f "$i" ] && continue
+
+        case "$i" in
+        *.sh)
+            # Source shell script for speed.
+            (
+            trap - INT QUIT TSTP
+            set stop
+            . $i
+            )
+            ;;
+        *)
+            # No sh extension, so fork subprocess.
+            $i stop
+            ;;
+        esac
+    done
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Starts mDNSResponder
+#
+
+start() {
+    start-stop-daemon --start --quiet --exec /usr/bin/mDNSResponder-param-init
+	echo -n "Starting mDNSResponder: "
+	start-stop-daemon --start --quiet --pidfile /var/run/mDNSResponder.pid \
+                --exec /usr/bin/mDNSResponder \
+                -- -b -f /etc/mDNSResponder.conf -P /var/run/mDNSResponder.pid
+	if [ "$?" != "0" ] ; then
+		echo "FAIL"
+	fi
+	echo "OK"
+}
+stop() {
+	echo -n "Stopping mDNSResponder: "
+	start-stop-daemon --stop --quiet --pidfile /var/run/mDNSResponder.pid
+	if [ "$?" != "0" ] ; then
+		echo "FAIL"
+	else
+		echo "OK"
+	fi
+	rm /var/run/mDNSResponder.pid 2>/dev/null
+}
+
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+  start)
+  	start
+	;;
+  stop)
+  	stop
+	;;
+  restart|reload)
+  	restart
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?

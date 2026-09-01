@@ -1,0 +1,16 @@
+#!/bin/sh
+
+case "$1" in
+	start)
+		/usr/sbin/fgb_auto &
+		;;
+	stop)
+        bluetoothctl disconnect &
+		printf "FGB disconnected.\n"
+		;;
+	*)
+		echo "Usage: $0 {start|stop}"
+		exit 1
+		;;
+esac
+exit 0

@@ -1,0 +1,103 @@
+#!/bin/sh
+#
+# Starts rtty
+#
+
+
+CONF_FILE=/etc/rtty_conf
+[ -e $CONF_FILE ] || exit 1
+
+host=$(cat /proc/gl-hw-info/device_ddns 2>/dev/null)
+[ -n "$host" ] || exit 2
+
+ARGS="-T 2 -a -I $host"
+
+get_startup_conf() {
+    local heartbeat=$(jq -r '.heartbeat' $CONF_FILE 2>/dev/null)
+    [ -z "$heartbeat" -o "$heartbeat" = "null" ] && exit 1
+    ARGS="$ARGS -i $heartbeat"
+
+    local timeout=$(jq -r '.timeout' $CONF_FILE 2>/dev/null)
+    if [ "$timeout" != "0" -a "$timeout" != "null" -a -n "$timeout" ]; then
+        ARGS="$ARGS --timeout=$timeout"
+    fi
+
+    local verbose=$(jq -r '.verbose' $CONF_FILE 2>/dev/null)
+    if [ "$verbose" = "true" ]; then
+        ARGS="$ARGS -v"
+    fi
+
+    local tls=$(jq -r '.tls' $CONF_FILE 2>/dev/null)
+    [ "$tls" != "false" ] && ARGS="$ARGS -sC /var/run/gl-rtty/ca.crt"
+
+    local type=$(jq -r '.servers|type' $CONF_FILE 2>/dev/null)
+    [ "$type" != "array" -o "$type" = "null" ] && exit 2
+
+    local cnt=$(jq -r '.servers|length' $CONF_FILE 2>/dev/null)
+    let cnt=cnt-1
+
+    for i in $(seq 0 $cnt); do
+        local server=$(jq -r '.servers['$i']' $CONF_FILE 2>/dev/null)
+        if [ -n "$server" -a "$server" != "null" ]; then
+            ARGS="$ARGS -h $server"
+        fi
+    done
+}
+
+start() {
+    local cloud_enable=$(jq -r '.enable' /etc/glinet/gl-cloud.conf 2>/dev/null)
+    [ "$cloud_enable" != "true" ] && exit 0
+ 
+    [ -e /var/run/cloud/bindinfo ] || exit 0
+    local bindtime=$(jq -r '.bindtime' /var/run/cloud/bindinfo)
+    [ -z "$bindtime" -o "$bindtime" = "null" ] && exit 0
+
+    get_startup_conf
+    echo -n "Starting rtty: "
+    start-stop-daemon --start -b --quiet --pidfile /var/run/rtty.pid \
+            --make-pidfile --exec /usr/bin/rtty -- $ARGS
+    if [ "$?" != "0" ]; then
+        echo "FAIL"
+    else
+        echo "OK"
+    fi
+    [ ! -e /var/run/rtty_status.pid ] && start-stop-daemon --start -b --quiet --pidfile /var/run/rtty_status.pid \
+	    --make-pidfile --exec /usr/bin/check_rtty_status.sh
+}
+
+stop() {
+    start-stop-daemon --stop --quiet --pidfile /var/run/rtty_status.pid
+    rm /var/run/rtty_status.pid 2>/dev/null
+    echo -n "Stopping rtty: "
+    start-stop-daemon --stop --quiet --pidfile /var/run/rtty.pid
+    if [ "$?" != "0" ] ; then
+        echo "FAIL"
+    else
+        echo "OK"
+    fi
+
+    rm /var/run/rtty.pid 2>/dev/null
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?
+

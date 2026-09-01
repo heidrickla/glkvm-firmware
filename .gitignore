@@ -1,0 +1,21 @@
+# Firmware images — 621 MB, re-fetchable via firmware/fetch.sh and verified
+# against firmware/SHA256SUMS. Never commit these.
+firmware/*.img
+firmware/*.img.part
+
+# Unpacked rootfs — 142 MB, regenerated from the images. The extracted CONFIG
+# files are small and worth keeping, so only the squashfs blobs are ignored.
+extracted/*.squashfs
+
+# Upstream clones, each with its own .git — vendored for reference, pinned in
+# FINDINGS.md (glkvm @3e8dd23, pikvm-kvmd @387846d). Re-clone rather than commit.
+vendor/
+
+# Backups pulled off devices by tools/apply_to_glkvm_safe.sh
+backups/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/

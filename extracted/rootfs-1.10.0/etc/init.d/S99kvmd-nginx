@@ -1,0 +1,85 @@
+#!/bin/sh
+
+DAEMON="/usr/sbin/nginx"
+PIDFILE="/run/kvmd/nginx.pid"
+
+# Function to check whether the certificate is valid
+check_cert_valid() {
+    local cert_file="$1"
+    local key_file="$2"
+    
+    # Check if the files exist
+    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+        return 1
+    fi
+    
+    # Do not check whether the certificate has expired
+    # if ! openssl x509 -in "$cert_file" -noout -checkend 86400 >/dev/null 2>&1; then
+    #     return 1
+    # fi
+    
+    # Check if the certificate format is correct
+    if ! openssl x509 -in "$cert_file" -noout >/dev/null 2>&1; then
+        return 1
+    fi
+    
+    # Check if the private key format is correct
+    if ! openssl pkey -in "$key_file" -noout >/dev/null 2>&1; then
+        return 1
+    fi
+    
+    # Check if the certificate and private key match
+    cert_pubkey=$(openssl x509 -in "$cert_file" -noout -pubkey 2>/dev/null | openssl md5 2>/dev/null)
+    key_pubkey=$(openssl pkey -in "$key_file" -pubout 2>/dev/null | openssl md5 2>/dev/null)
+    
+    if [ "$cert_pubkey" != "$key_pubkey" ] || [ -z "$cert_pubkey" ]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+start() {
+    printf "Starting kvmd-nginx: "
+    mkdir -p /tmp/kvmd-nginx
+    mkdir -p /var/log/nginx/
+    # Check if the certificate exists and is valid; regenerate it if invalid
+    if ! check_cert_valid /etc/kvmd/user/ssl/server.crt /etc/kvmd/user/ssl/server.key; then
+        printf "Certificate invalid or missing, generating new certificate... "
+        mkdir -p /etc/kvmd/user/ssl
+        # Remove any invalid certificate files that may exist
+        rm -f /etc/kvmd/user/ssl/server.crt /etc/kvmd/user/ssl/server.key
+        openssl ecparam -out /etc/kvmd/user/ssl/server.key -name prime256v1 -genkey 
+        openssl req -new -x509 -sha256 -nodes -key /etc/kvmd/user/ssl/server.key -out /etc/kvmd/user/ssl/server.crt -days 3650 -subj "/C=US/O=GLKVM/OU=GLKVM/CN=localhost"
+        sync
+        printf "Certificate generation completed. "
+    fi
+    sync
+    $DAEMON -p /etc/kvmd/nginx -c /etc/kvmd/nginx-kvmd.conf -g "pid $PIDFILE; user root; error_log stderr;"
+    [ $? = 0 ] && echo "OK" || echo "FAILED"
+}
+
+stop() {
+    printf "Stopping kvmd-nginx: "
+    start-stop-daemon --stop --quiet --pidfile $PIDFILE
+    [ $? = 0 ] && echo "OK" || echo "FAILED"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?
+

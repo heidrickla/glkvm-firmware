@@ -1,0 +1,105 @@
+#!/bin/sh
+#
+# Start cloudflare tunnel service
+#
+
+DAEMON="cloudflared"
+CONFIG_FILE="/etc/kvmd/user/cloudflare.json"
+PIDFILE="/var/run/cloudflare.pid"
+
+# Check if the config file exists
+check_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Config file $CONFIG_FILE not found"
+        return 1
+    fi
+    
+    # Check if jq exists
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "jq command not found, cannot parse JSON config file"
+        return 1
+    fi
+    
+    # Parse the JSON config file with jq
+    ENABLE=$(jq -r '.enable' "$CONFIG_FILE" 2>/dev/null)
+    TOKEN=$(jq -r '.token' "$CONFIG_FILE" 2>/dev/null)
+    
+    # Check if jq parsing succeeded
+    if [ $? -ne 0 ]; then
+        echo "JSON config file format error"
+        return 1
+    fi
+    
+    if [ "$ENABLE" != "true" ]; then
+        echo "Cloudflare tunnel not enabled (enable=$ENABLE)"
+        return 1
+    fi
+    
+    if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ] || [ "$TOKEN" = "" ]; then
+        echo "Cloudflare tunnel token is empty"
+        return 1
+    fi
+    
+    return 0
+}
+
+start() {
+    printf 'Starting %s: ' "$DAEMON"
+    
+    # Check the config
+    if ! check_config; then
+        echo "SKIP"
+        return 0
+    fi
+    
+    # Check if cloudflared exists
+    if ! command -v "$DAEMON" >/dev/null 2>&1; then
+        echo "FAIL (cloudflared not found)"
+        return 1
+    fi
+    
+    # Start the cloudflare tunnel
+    start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON" -- tunnel run --token "$TOKEN"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        echo "OK"
+    else
+        echo "FAIL"
+    fi
+    return "$status"
+}
+
+stop() {
+    printf 'Stopping %s: ' "$DAEMON"
+    start-stop-daemon -K -p "$PIDFILE"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        rm -f "$PIDFILE"
+        echo "OK"
+    else
+        echo "FAIL"
+    fi
+    return "$status"
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $? 

@@ -1,0 +1,40 @@
+#!/bin/sh
+
+DAEMON="/usr/bin/ttyd"
+PIDFILE="/var/run/ttyd.pid"
+KVMD_WEBTERM_ARGS=""  # Extra arguments can be set here
+
+start() {
+    printf "Starting ttyd: "
+    start-stop-daemon --start --quiet --background --make-pidfile --pidfile $PIDFILE --exec $DAEMON -- \
+        -W \
+        --interface=/run/kvmd/ttyd.sock \
+        --port=0 \
+        $KVMD_WEBTERM_ARGS \
+        /bin/bash -c 'echo -ne "\033]0;PiKVM Terminal: `hostname -f` (ttyd)\007"; cat /etc/motd; export TERM=linux; umask 0022; bash'
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+    printf "Stopping ttyd: "
+    start-stop-daemon --stop --quiet --pidfile $PIDFILE
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?
