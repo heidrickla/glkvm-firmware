@@ -1,0 +1,33 @@
+name: Smoke
+
+# A POSITIVE CONTROL, not a real check.
+#
+# validate.yml failed six times producing no output and no artifact, which means
+# the job died before any step of mine ran. Every fix so far has been a guess at
+# which feature the runner lacks. This job uses the smallest possible surface —
+# no checkout, no marketplace action, no shell declaration, no `set -e` — so its
+# result answers one question: does this runner execute anything at all?
+#
+# If this is green and validate.yml is red, the fault is in something
+# validate.yml uses and this does not, and the difference can be bisected.
+# If this is red too, the problem is the runner or the repo, not the workflow.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say something
+        run: |
+          echo "runner executed a step"
+          echo "shell   : $0"
+          echo "uname   : $(uname -a)"
+          echo "whoami  : $(whoami)"
+          echo "pwd     : $(pwd)"
+          echo "python3 : $(command -v python3 || echo missing)"
+          echo "bash    : $(command -v bash || echo missing)"
+          echo "git     : $(command -v git || echo missing)"
+          echo "node    : $(command -v node || echo missing)"
