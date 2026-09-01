@@ -1,65 +1,75 @@
 name: Smoke
 
-# POSITIVE CONTROL AND BISECT, not a real check.
+# DIAGNOSTIC, NOT A CHECK. Delete once validate.yml is green.
 #
-# validate.yml failed six times producing no output and no artifact, so the job
-# was dying before any step of mine ran. The bare `smoke` job below then passed,
-# which proved the runner executes workflows fine and the fault is a feature
-# validate.yml uses and smoke did not.
+# This Gitea exposes no job logs to the API and the artifacts endpoint returns
+# nothing, so the ONLY channel back from a run is per-job success/failure. These
+# jobs therefore encode the question in the job name and the answer in its
+# status: whichever goes red names the missing piece.
 #
-# Rather than keep guessing one feature per push, each job below adds exactly
-# ONE of the suspects to the known-good baseline. Whichever goes red names the
-# cause. They are tiny, so the shared capacity-1 runner clears them quickly.
-#
-# DELETE THIS FILE once validate.yml is green — a diagnostic left running
-# forever is noise, and it occupies a runner other sessions are queueing for.
+# Established so far, each by a job that passed: the runner executes steps;
+# actions/checkout@v3 works; a declared bash shell with `set -euo pipefail` and
+# process substitution works; actions/upload-artifact@v3 works. So the fault is
+# inside validate.yml's real work, not its scaffolding.
 
 on:
   push:
   workflow_dispatch:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  # Baseline: known good.
-  smoke:
+  a-pip-module-exists:
     runs-on: ubuntu-latest
     steps:
-      - name: Say something
-        run: |
-          echo "runner executed a step"
-          echo "shell   : $0"
-          echo "bash    : $(command -v bash || echo missing)"
-          echo "python3 : $(command -v python3 || echo missing)"
-          echo "node    : $(command -v node || echo missing)"
+      - run: |
+          set -euo pipefail
+          python3 -m pip --version
 
-  # Suspect 1: the checkout action.
-  smoke-checkout:
+  b-pip-can-install-pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set -euo pipefail
+          python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
+
+  c-shellcheck-on-path-after-pip:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set -euo pipefail
+          python3 -m pip install --quiet "shellcheck-py==0.10.0.1"
+          command -v shellcheck
+          shellcheck --version
+
+  d-selftest-plain:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - run: |
-          echo "checkout worked"
-          ls -la | head -20
+          set -euo pipefail
+          ./tools/selftest.sh
 
-  # Suspect 2: declaring bash as the shell.
-  smoke-bash:
+  e-selftest-ci-strict:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
     steps:
+      - uses: actions/checkout@v3
       - run: |
           set -euo pipefail
-          echo "bash shell + set -euo pipefail worked"
-          echo "process substitution:"
-          exec > >(tee -a /tmp/smoke.log) 2>&1
-          echo "  tee via process substitution worked"
+          python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
+          export PATH="$HOME/.local/bin:$PATH"
+          ./tools/selftest.sh --ci
 
-  # Suspect 3: the artifact upload, which needs the runner's artifact server.
-  smoke-artifact:
+  f-repo-files-are-executable:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "hello from artifact job" > note.txt
-      - uses: actions/upload-artifact@v3
-        with:
-          name: smoke-note
-          path: note.txt
+      - uses: actions/checkout@v3
+      - run: |
+          set -euo pipefail
+          # A Windows-authored repo can land here without the exec bit, and
+          # "./tools/selftest.sh: Permission denied" would fail every run.
+          test -x tools/selftest.sh
+          test -x tools/verify-gates.sh
+          test -x tools/provision.sh
