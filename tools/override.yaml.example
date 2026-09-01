@@ -89,3 +89,38 @@ ipmi:
 #   VNC :  vncviewer <unit-ip>:5900
 #   IPMI:  ipmitool -I lanplus -H <unit-ip> -U <user> -P <pass> power status
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# User-GPIO power/switch drivers (Route 6).
+#
+# This is how you wire external power control — a TESmart/Extron/EZCoo switch,
+# a Hue or ANEL outlet, or an arbitrary command. ~20 drivers ship in
+# kvmd/plugins/ugpio/. The example below uses `cmd`, which needs no extra
+# hardware and proves the mechanism end to end.
+#
+# VERIFIED LIVE 2026-09-01: kvmd logged "Running User-GPIO driver: demo".
+#
+# NOTE kvmd auto-injects a `__wol__` driver and scheme entry (apps/__init__.py
+# :249-257), so Wake-on-LAN is already wired without any config from you.
+#
+# Replace the demo block with a real driver, e.g.:
+#     drivers:
+#       tesmart:
+#         type: tesmart
+#         host: 10.0.0.50
+# ---------------------------------------------------------------------------
+kvmd:
+    gpio:
+        drivers:
+            demo:
+                type: cmd
+                cmd: [/bin/true]
+        scheme:
+            demo_button:
+                driver: demo
+                pin: 0
+                mode: output
+                switch: false
+        view:
+            table:
+                - ["#Demo", "demo_button"]

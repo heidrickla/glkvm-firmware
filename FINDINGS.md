@@ -404,6 +404,37 @@ symbols ever matter.
 
 ---
 
+## The 10 routes — status on `.15`
+
+| # | Route | Status | Note |
+| --- | --- | --- | --- |
+| 1 | Classic PiKVM UI on :8888 | ✅ **live** | 200 + `PiKVM Login`; autostarts |
+| 2 | De-cloud | ✅ **already off** | `enable:false`; `gl-cloud`/`rtty` not running |
+| 3 | VNC | ✅ **live** | `RFB 003.008`; autostarts |
+| 4 | IPMI | ⛔ **blocked** | `pyghmi` absent → daemon cannot start. Gets you ATX power control via `ipmitool` and nothing else. Needs a decision. |
+| 5 | LDAP / PAM / RADIUS auth | ◐ **validated, not activated** | Both configs pass `kvmd --dump-config`. LDAP needs a server; PAM would change who can log in. |
+| 6 | Power/switch drivers (ugpio) | ✅ **live** | `cmd` driver loaded — kvmd logged `Running User-GPIO driver: demo`. `__wol__` is auto-injected by kvmd. |
+| 7 | Remote access (Tailscale/NetBird/ZeroTier/Cloudflare) | ✅ **already in use** | `.15` = `gl-rm10-workstation` 100.64.0.62; **netbird, zerotier AND cloudflared all running** |
+| 8 | Self-hosted relay (glkvm-cloud) | ⬜ **not started** | Needs an x86_64 Docker host + a domain. Redundant while 7 works. |
+| 9 | Patch kvmd in place | ✅ **verified** | Round-tripped the device's own tree; on-device `diff -rq` clean |
+| 10 | Repack the firmware image | ◐ **prereq done** | Correct **RM10** image fetched and hash-verified; unpacker confirmed on it (`model=rm10`, `manufacturer=RV1126B`, 10 partitions). Repack itself not attempted. |
+
+### Note for route 2
+
+`cloudflared`, `netbird` and `zerotier` are all running on `.15` alongside
+Tailscale. Each is an outbound tunnel. De-clouding removed GL.iNet's own cloud,
+but these remain — worth deciding which you actually want.
+
+### Correct firmware for these units
+
+`glkvm-RM10-1.10.0-0715-1784101556.img` (291 MB, sha256 `842760f4…922b`,
+verified against the vendor list). RM10 has **no release channel** — testing
+only, one version listed. The device runs **1.8.1**, so this image is an
+upgrade, not a like-for-like restore.
+
+RM10 partition layout differs from RM1: rootfs 224 MB @ flash `0x38000`,
+`oem` @ `0x238000`, boot 22.7 MB, recovery 26.2 MB.
+
 ## LIVE TEST — 2026-09-01, on `.15` (GL-RM10, fw 1.8.1)
 
 Root shell obtained after the SSH key was installed via the browser console
