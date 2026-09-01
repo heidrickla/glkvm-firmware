@@ -4,6 +4,25 @@ Three units, two firmware builds, goal is de-clouding and the ability to modify
 firmware. Written before any shell access, so everything below is a hypothesis
 with a test attached rather than a set of instructions.
 
+> **⚠ PARTLY SUPERSEDED — read [FINDINGS.md](FINDINGS.md) first.**
+>
+> This document is kept as the original reasoning. Several of its hypotheses
+> have since been tested and retired:
+>
+> - **The vendor image is not encrypted.** It is a stock Rockchip `RKFW`
+>   container, opened locally with no keys. The "two decrypters" note below
+>   does not apply to it.
+> - **No reflash is needed for de-clouding**, or for most changes. GL.iNet
+>   publishes `kvmd` under GPLv3 with a supported push script, and the classic
+>   PiKVM UI is already installed on the devices — disabled by a comment.
+> - **Stage 1 (SSH) is not the way in.** Key auth is unconfigured on all three
+>   units; the device's own web terminal gives root instead.
+> - Open questions 3 and 4 are answered (buildroot/OpenWrt hybrid; squashfs
+>   with a writable overlay). Question 1 is still open — the units run a build
+>   GL.iNet no longer distributes.
+>
+> The parallel de-cloud track at the end still stands unchanged.
+
 ## What is known so far
 
 Measured from the LAN, unauthenticated:
