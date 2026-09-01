@@ -36,18 +36,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The runner image ships shellcheck 0.9.0 via apt on 22.04/24.04. Install
-      # rather than letting the check skip: under --ci a skip is a failure, and
-      # shell bugs are this repo's dominant failure mode (unquoted $SSH under a
-      # changed IFS, ssh eating a read loop's stdin).
+      # shellcheck comes from pip, not apt. Every other workflow on this runner
+      # is pip-only, and shellcheck-py ships the same upstream binary in a wheel
+      # — no sudo, no apt sources, nothing to differ between runner images.
+      #
+      # Installed rather than allowed to skip: under --ci a skip IS a failure,
+      # and shell bugs are this repo's dominant failure mode (unquoted $SSH
+      # under a changed IFS; ssh eating a read loop's stdin).
+      #
+      # Both pins are deliberate. An unpinned linter makes CI non-reproducible,
+      # which has already been paid for once on the sleepiq repo.
       - name: Install shellcheck and PyYAML (PINNED)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
           python3 -m pip install --quiet --upgrade pip
-          python3 -m pip install --quiet "PyYAML==6.0.2"
-          shellcheck --version | head -2
+          python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
+          # pip may land console scripts outside PATH on this image.
+          python3 -c "import shellcheck_py, pathlib, sys; print(pathlib.Path(shellcheck_py.__file__).parent)"
+          shellcheck --version | head -2 || {
+            echo "::error::shellcheck installed but not on PATH"
+            exit 1
+          }
           python3 -c "import yaml; print('pyyaml', yaml.__version__)"
 
       # One command covers shell syntax, shellcheck, Python compilation,
@@ -86,9 +95,8 @@ jobs:
       - name: Install shellcheck and PyYAML (PINNED)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          python3 -m pip install --quiet "PyYAML==6.0.2"
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
 
       - name: Inject violations and require each to be caught
         run: |
