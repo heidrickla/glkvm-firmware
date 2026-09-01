@@ -29,6 +29,12 @@ GATE="/etc/kvmd/user/vnc.enable"
 # script (its argv contains "S99kvmd-vnc"), so `stop` killed its own
 # caller. Live-tested: it killed the invoking SSH session.
 PATTERN="$DAEMON $DAEMON_ARGS"
+#
+# NOTE: pgrep -f on this pattern STILL matches any shell whose argv
+# contains it -- including an ssh command that mentions the daemon.
+# daemon_pids() therefore also excludes anything that is not the real
+# python process, or `status` reports "running" for a dead daemon.
+# Measured 2026-09-01: status claimed running while ps showed nothing.
 
 . /etc/profile
 
@@ -37,7 +43,14 @@ daemon_pids() {
     pgrep -f "$PATTERN" 2>/dev/null | while read -r pid; do
         [ "$pid" = "$$" ] && continue
         [ "$pid" = "$PPID" ] && continue
-        echo "$pid"
+        # only count a real interpreter running the daemon, never a shell that
+        # merely mentions it on its command line
+        # grep -a reads the NUL-separated cmdline directly; a command
+        # substitution here makes bash warn about ignored null bytes.
+        if grep -qa -- "$DAEMON" /proc/$pid/cmdline 2>/dev/null &&
+           grep -qa -- python /proc/$pid/cmdline 2>/dev/null; then
+            echo "$pid"
+        fi
     done
 }
 
