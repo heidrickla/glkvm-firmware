@@ -46,7 +46,7 @@ jobs:
     name: Tooling selftest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
       # EVERYTHING IS TEED TO ci.log AND UPLOADED, PASS OR FAIL.
       #
@@ -145,7 +145,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
       - name: Install shellcheck and PyYAML (PINNED)
         run: |
