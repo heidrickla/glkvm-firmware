@@ -392,6 +392,45 @@ symbols ever matter.
 
 ---
 
+## Verification status of the tooling
+
+Nothing in `tools/` has run against a unit — SSH key auth is still unconfigured.
+What HAS been verified, locally, against the real shipped files:
+
+| Route | Check | Result |
+| --- | --- | --- |
+| 1 — classic UI | awk transform vs the real `nginx-kvmd.conf` of **all three** versions | braces balanced, 8888 live, 443 preserved, exactly one live `[::]:443`, idempotent |
+| 2 — override | merge run through **kvmd's own loader** (`yamlconf.loader` + `yamlconf.merger.yaml_merge`, exactly as `apps/__init__.py:205`) against the real 1.10.0 `main.yaml` | override applied (vnc 5900, ipmi 623); **memsinks survived**; `hid.type=otg`, `atx.type=glatx`, `msd.type=otg`, 21-arg streamer cmd all preserved |
+| De-cloud | `sed` vs the real `gl-cloud.conf` of all three versions | valid JSON out, `enable=false` |
+| All scripts | POSIX `sh -n`, bashism scan | clean (the `function`/`==` hits are awk, inside a quoted program) |
+
+Two defects were caught this way, both of which would have failed on hardware:
+
+1. The awk anchored `#` to column 1. **1.3.0 indents the marker**
+   (`        # server {`) — so on a 1.3.0-era config it silently did nothing.
+   Since the units run an unidentified build, that mattered.
+2. **1.3.0 writes `listen [::]:443 ssl;` inside the 8888 block** — a GL.iNet
+   typo. Uncommented verbatim it binds a second server to `:443` beside the
+   real one. Now rewritten to 8888 and reported.
+
+The one thing that cannot be checked off-device: the units run **busybox awk**,
+and the only ARM busybox available is inside the extracted rootfs. Mitigated by
+design rather than by testing — `enable_classic_ui.sh` asserts `listen 8888`
+actually went live, then runs `nginx -t`, and restores its backup if either
+fails. A busybox-awk incompatibility surfaces as a clean no-op revert.
+
+### Installing the key without a shell
+
+`POST /api/system/ssh_key` (`api/system.py:1672`) writes
+`/root/.ssh/authorized_keys` — `os.makedirs(ssh_dir, mode=0o700)`,
+`chmod 0o600`, then `sync`. The web UI exposes this as an SSH-key field, so no
+terminal is needed to bootstrap access.
+
+**It opens the file with `"w"` — it overwrites rather than appends.** Any key
+already there is replaced.
+
+---
+
 ## Open questions
 
 **Which build is on which unit — unresolved.** The units serve bundles that
