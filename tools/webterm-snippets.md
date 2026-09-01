@@ -83,21 +83,27 @@ cat /etc/glinet/gl-cloud.conf
 the toggle. This does not stop OTA checks (`fw.gl-inet.com`) or STUN
 (`stun.l.google.com`); keep the gateway egress rule for those.
 
-## 3. Install an SSH key (unblocks every script in tools/)
+## 3. Install the SSH key (unblocks every script in tools/)
 
-Replace the key with your own public key.
+This exact line — the matching private key is in `.ssh-glkvm/` (gitignored).
+Verified 2026-09-01 that this machine has **no** existing key for these units:
+all five default identity files report `type -1` (absent) and the Windows agent
+has no identities. So this is the bootstrap.
 
 ```sh
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
-cat >> /root/.ssh/authorized_keys <<'KEY'
-ssh-ed25519 AAAA...your-public-key-here... you@host
-KEY
+echo 'ssh-ed25519 <your-ed25519-public-key> claude-glkvm-Workstation' >> /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 /etc/init.d/S50dropbear restart
 ```
 
-Then from your machine: `ssh root@192.0.2.15 true` should succeed silently,
-and `tools/enable_classic_ui.sh`, `tools/apply_to_glkvm_safe.sh` etc. will work.
+Run it on each unit you want reachable (start with `.15`). Then from the repo:
+
+```sh
+ssh -i .ssh-glkvm/id_ed25519 -o IdentitiesOnly=yes root@192.0.2.15 true
+```
+
+silently succeeding means every script in `tools/` will work.
 
 ## 4. VNC / IPMI (optional, after 3)
 

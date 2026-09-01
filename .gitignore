@@ -19,3 +19,6 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+
+# Dedicated keypair for the RM1 units. Private key must never be committed.
+.ssh-glkvm/

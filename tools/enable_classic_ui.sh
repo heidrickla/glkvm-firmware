@@ -3,7 +3,7 @@
 #
 # BACKGROUND
 #   The RM1 ships BOTH front ends:
-#       /usr/share/kvmd/web     classic PiKVM UI  — VERIFIED BUILT, not just
+#       /usr/share/kvmd/web     classic PiKVM UI — VERIFIED BUILT, not just
 #                               sources: 5 .html, 35 .js, 25 .css, 30 .svg
 #                               (the .pug files are sources shipped alongside)
 #       /usr/share/kvmd/glweb   GL.iNet's Vue app (assets/index-*.js)
@@ -19,6 +19,10 @@
 #   Result: Vue app stays on 443, classic PiKVM UI appears on 8888.
 #   Nothing is replaced or removed.
 #
+#   Verified present and commented out in ALL THREE published firmware
+#   versions (1.3.0 / 1.7.0 / 1.10.0, July 2025 - July 2026), so it is very
+#   likely present on any build in that range.
+#
 # Usage:  ./tools/enable_classic_ui.sh <device-ip>            # apply
 #         ./tools/enable_classic_ui.sh <device-ip> --revert   # restore backup
 #
@@ -33,7 +37,13 @@ CONF="/etc/kvmd/nginx-kvmd.conf"
 echo "$IP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
   || { echo "ERROR: '$IP' is not a bare IPv4 address (no hostnames — three units)." >&2; exit 1; }
 
-SSH="ssh -o BatchMode=yes root@${IP}"
+# Use the dedicated project keypair if it exists, else the default agent/keys.
+KEY="$(dirname "$0")/../.ssh-glkvm/id_ed25519"
+if [ -f "$KEY" ]; then
+    SSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes root@${IP}"
+else
+    SSH="ssh -o BatchMode=yes root@${IP}"
+fi
 
 if [ "$MODE" = "--revert" ]; then
     echo ">> reverting $CONF on $IP ..."
@@ -45,32 +55,55 @@ fi
 
 # Uncomment the commented-out server block containing "8888".
 #
-# Terminates on BRACE BALANCE of the stripped text, not on the first "#}".
-# An earlier version keyed on /^#\s*\}\s*$/ and terminated on the inner
-# `location /connect {` closing brace, leaving the server block's own "#  }"
-# still commented — producing an unclosed block. Verified against the real
-# 1.10.0 nginx-kvmd.conf: braces balance 16/16, and a second run is a no-op.
+# Handles BOTH marker styles found in shipped configs:
+#   1.10.0 / 1.7.0 :  "#        server {"   -- # at column 1
+#   1.3.0          :  "        # server {"   -- # indented
+# An earlier version anchored # to column 1 and silently did nothing on a
+# 1.3.0-era config. Since the units run an UNIDENTIFIED build, both forms
+# must work.
+#
+# Terminates on BRACE BALANCE of the uncommented text, so an inner
+# "location ... {" does not end the block early (an earlier version keyed on
+# /^#\s*\}\s*$/ and left the server block unclosed).
+#
+# Also repairs a GL.iNet typo: 1.3.0 writes "listen [::]:443 ssl;" INSIDE the
+# 8888 block. Uncommented verbatim that binds a SECOND server to :443
+# alongside the real one. Corrected to 8888, and reported when it fires.
 AWK_PROG='
-/^#[[:space:]]*server[[:space:]]*\{/ && !inblk {
+function uncomment(s,   i) {
+    i = index(s, "#")
+    if (i == 0) return s
+    return substr(s, 1, i-1) substr(s, i+1)
+}
+/^[[:space:]]*#[[:space:]]*server[[:space:]]*\{/ && !inblk {
     inblk=1; n=0; hit=0; depth=0
     L[n++]=$0
-    s=$0; sub(/^#/,"",s)
-    depth += gsub(/\{/,"{",s) - gsub(/\}/,"}",s)
+    s=uncomment($0); depth += gsub(/\{/,"{",s) - gsub(/\}/,"}",s)
     next
 }
 inblk {
     L[n++]=$0
     if ($0 ~ /8888/) hit=1
-    s=$0; sub(/^#/,"",s)
-    depth += gsub(/\{/,"{",s) - gsub(/\}/,"}",s)
+    s=uncomment($0); depth += gsub(/\{/,"{",s) - gsub(/\}/,"}",s)
     if (depth <= 0) {
-        for (i=0;i<n;i++) { l=L[i]; if (hit) sub(/^#/,"",l); print l }
+        for (i=0;i<n;i++) {
+            l=L[i]
+            if (hit) {
+                l=uncomment(l)
+                if (l ~ /listen[[:space:]]+\[::\]:443/) { sub(/443/, "8888", l); fixed++ }
+            }
+            print l
+        }
         inblk=0
     }
     next
 }
 { print }
+END { if (fixed) print "#   note: listen [::]:443 corrected to 8888 by enable_classic_ui.sh" }
 '
+
+echo ">> target : root@${IP}:${CONF}"
+$SSH true 2>/dev/null || { echo "ERROR: cannot ssh to $IP (key auth only)." >&2; exit 1; }
 
 echo ">> backing up $CONF -> ${CONF}.orig (only if absent) ..."
 $SSH "[ -f '${CONF}.orig' ] || cp '$CONF' '${CONF}.orig'"
@@ -81,6 +114,13 @@ printf '%s\n' "$AWK_PROG" | $SSH \
      && awk -f /tmp/glkvm_fix.awk '$CONF' > /tmp/glkvm_new \
      && mv /tmp/glkvm_new '$CONF' \
      && rm -f /tmp/glkvm_fix.awk"
+
+echo ">> confirming the block actually went live ..."
+if ! $SSH "grep -qE '^[[:space:]]*listen[[:space:]]+8888' '$CONF'"; then
+    echo "!! 8888 is still not live — restoring backup, no change made" >&2
+    $SSH "cp '${CONF}.orig' '$CONF'"
+    exit 1
+fi
 
 echo ">> validating nginx config ..."
 if ! $SSH "/usr/sbin/nginx -t -p /etc/kvmd/nginx -c '$CONF'"; then
