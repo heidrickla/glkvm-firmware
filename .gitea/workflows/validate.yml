@@ -29,6 +29,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# EVERY run block here uses `set -euo pipefail` and one uses process
+# substitution, and neither is POSIX. The runner's default shell is not bash, so
+# without this the FIRST LINE of every step fails with "Illegal option -o
+# pipefail" — which presents as a red job with no output at all, since the step
+# dies before it can print anything.
+#
+# Every other workflow on this runner sidesteps it by using plain commands with
+# no `set -e`; this repo wants the strict shell, so it asks for bash explicitly.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   validate:
     name: Tooling selftest
