@@ -565,6 +565,27 @@ So the correct install path for anything of ours is
 **`/etc/kvmd/user/scripts/`**, not `/etc/init.d/`. Verified by reboot: VNC came
 back on its own, `Listening VNC on TCP [::]:5900` in the boot log.
 
+### Full round trip — verified
+
+The build path was exercised end to end, not just forwards:
+
+```
+provision → deprovision → provision → reboot → verify
+```
+
+- **`deprovision.sh --keep-key`** restored `/etc/kvmd/nginx-kvmd.conf`
+  **byte-identical to the baseline captured before any change was made**
+  (`diff` against `baseline/15-nginx-kvmd.conf.orig`: identical). `override.yaml`
+  back to stock, hook and gate removed, no stray `/etc/init.d` copy, 8888 and
+  5900 closed, 443 unaffected, `kvmd --dump-config` still exit 0.
+- **`provision.sh` re-run from that reverted state** brought everything back —
+  so the path works from stock, not merely idempotently on an already-configured
+  unit.
+- **A reboot after that** left 443, 8888, 5900 and SSH all serving.
+
+The undo path is therefore proven, not assumed — which matters, since five of
+the bugs in this session were found only by running things.
+
 ### Reboot persistence — verified
 
 Three reboots. Everything survives (overlay is on `/userdata`, `mmcblk0p8`):
