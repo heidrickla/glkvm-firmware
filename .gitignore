@@ -22,3 +22,6 @@ venv/
 
 # Dedicated keypair for the RM1 units. Private key must never be committed.
 .ssh-glkvm/
+
+# Throwaway keypair for the squashfs build VM
+.ssh-buildvm/
