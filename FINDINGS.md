@@ -1,409 +1,64 @@
-# GL-RM1 — findings from published source
+# GL-RM1 (Comet) — what the units are, and how to change them
 
-Established by reading GL.iNet's own GPLv3 source, not by touching the devices.
-Source: https://github.com/gl-inet/glkvm @ `3e8dd23` (v1.10.0, 2026-08-11).
-Local shallow clone: `<scratchpad>/glkvm` (7.2 MB).
+Three units: `192.0.2.13`, `.14`, `.15`. Goal: de-cloud, and be able to modify
+the software.
 
-Everything here is *source-derived*. Nothing below has been confirmed against
-`.13`/`.14`/`.15` yet — see "Verify on .15" at the end.
+Everything here was established from GL.iNet's published GPLv3 source, from
+firmware images unpacked locally, and from read-only probes of the units. **No
+change has been made to any device.**
 
-## The headline: no decrypt/repack needed for kvmd changes
+Claims are marked:
 
-The stock software is a **GPLv3 fork of PiKVM's `kvmd`**, published in full.
-`apply_to_glkvm.sh` in that repo pushes a locally-modified tree to the device:
+- **[measured]** — observed directly against a unit or a local image
+- **[source]** — read out of published code, with file:line
+- **[untested]** — follows from the above but has not been run
 
-```sh
-REMOTE_HOST="glkvm.local"
-REMOTE_DIR="/usr/lib/python3.12/site-packages/kvmd"
-REMOTE_USER="root"
-SSH_PORT=22
-ssh root@glkvm.local "rm $REMOTE_DIR/* -R"    # <-- destructive, see warning
-scp -r -P 22 kvmd/* root@glkvm.local:$REMOTE_DIR/
-```
+---
 
-**Warning:** the script `rm -R`s the remote kvmd directory *before* copying. If
-the scp then fails (network drop, full disk, wrong key), the device is left with
-no kvmd. Back up `/usr/lib/python3.12/site-packages/kvmd` first, and edit the
-script to use a staging dir + atomic swap before running it against anything but
-`.15`.
+## Bottom line
 
-Also note it targets `glkvm.local` by hostname — with three units on the LAN,
-mDNS will resolve to whichever answers first. **Change `REMOTE_HOST` to an
-explicit IP before every run.** This is the single easiest way to modify the
-wrong device.
+The stock software is a GPLv3 fork of PiKVM's `kvmd`. Three things follow, in
+the order worth doing them:
 
-This retires the download → decrypt → repack → reflash track for anything
-inside kvmd. Image-level work is only needed for what lives outside it: the
-init scripts, the `gl-cloud`/`rtty` binaries, u-boot.
+1. **The classic PiKVM web UI is already installed on the devices and disabled
+   by a comment** in the nginx config. Uncommenting one server block exposes it
+   on port 8888, leaving GL.iNet's UI untouched on 443.
+2. **VNC and IPMI daemons ship too**, fully wired, missing only an init script.
+3. **De-clouding is a supported toggle** — no firmware work at all.
 
-## Platform, as revealed by the source
+Firmware modification remains possible (signing was added in 1.10.0 but ships
+with a bypass), and it is the only route that survives an OTA — but it is the
+last resort, not the first.
 
-| | |
-| --- | --- |
-| Init | buildroot-style `/etc/init.d/S<NN><name>`, not procd |
-| But also | `ubus call gl-cloud unbind` — OpenWrt's ubus is present |
-| Config | `/etc/glinet/*.conf` |
-| SSH | dropbear 2025.89 on all three (measured) |
-| Python | 3.12, kvmd in `site-packages` |
-| Video SoC | Rockchip — `S99rkipc` is the Rockchip IPC media daemon |
-| HDMI bridge | LT6911C or GSV1127X depending on board rev, over i2c-0/i2c-1 |
-| WebRTC | `S99gl-pion` (pion = Go WebRTC stack) |
-| Hardware info | `/proc/gl-hw-info/{model,device_mac,device_sn,device_ddns}` |
+---
 
-So: a GL.iNet hybrid — OpenWrt userspace pieces on a buildroot init. PLAN.md
-open question 3 ("OpenWrt-derived or custom Linux?") is answered as "both, sort
-of", which mainly means **don't assume `uci`/`opkg` work.**
+## The platform
 
-## The cloud stack, fully enumerated
-
-GL.iNet's cloud is internally called **astrowarp**. From
-`kvmd/apps/kvmd/api/astrowarp.py`:
-
-| Path | What it is |
-| --- | --- |
-| `/etc/init.d/S99gl-cloud` | the cloud daemon |
-| `/etc/glinet/gl-cloud.conf` | its config, JSON, has an `enable` key |
-| `/etc/init.d/S99rtty` | **rtty — GL.iNet's remote shell tunnel** |
-| `/var/run/cloud/bindinfo` | bind state (`{"bindtime","email","username"}`) |
-| `/var/run/cloud/bindlink` | pairing link |
-| `/var/run/cloud/dynamic_code` | pairing code |
-
-`GET /api/astrowarp/enable?enable=false` does exactly this:
-
-1. sets `enable: false` in `/etc/glinet/gl-cloud.conf`
-2. `S99gl-cloud stop`
-3. `S99rtty stop`
-
-**That is the whole de-cloud, and it is a supported UI toggle.** No firmware
-work of any kind. `POST /api/astrowarp/unbind` additionally runs
-`ubus call gl-cloud unbind` to drop the account binding.
-
-`rtty` is worth calling out separately: it is a remote *shell* tunnel, not just
-video relay. It only stops when the cloud is disabled. Confirm it is actually
-down rather than trusting the toggle.
-
-Other outbound paths that are NOT covered by that toggle:
-
-- **OTA** — `kvmd/apps/kvmd/api/upgrade.py`:
-  `https://fw.gl-inet.com/kvm/{model}/release` and `.../testing`
-- **STUN** — `kvmd/apps/__init__.py:952`: default `stun.l.google.com`
-  (`stun.gl-inet.cn` if the country code is CN)
-
-Both need the gateway rule regardless. The egress deny in PLAN.md stays.
-
-## Five built-in alternatives to the vendor cloud
-
-Already shipped, each with its own API module and init script — no modification
-required to use any of them:
-
-| Service | Module | Init script |
+| | | |
 | --- | --- | --- |
-| Tailscale | `api/tailscale.py` | `S99tailscale` |
-| NetBird | `api/netbird.py`, `netbird_daemon.py` | `S99netbird` |
-| ZeroTier | `api/zerotier.py` | `S99zerotier` |
-| Cloudflare Tunnel | `api/cloudflare.py` | `S99cloudflare` |
-| GLKVM-Cloud (self-hosted) | — | https://github.com/gl-inet/glkvm-cloud |
-
-GLKVM-Cloud is GL.iNet's own relay, self-hostable via Docker (x86_64 only),
-per-device subdomains. That is "replace their cloud with your cloud" rather
-than "no cloud" — the better fit if remote access off-LAN is actually wanted.
-
-Also present: `S80ttyd` (web terminal, driven by `api/system.py`) — that is the
-"Terminal → Access" button in the UI, and it is the path of least resistance to
-a shell on `.15`.
-
-## Alternative software stacks, assessed
-
-- **Upstream PiKVM** — no. Assumes a Raspberry Pi; the RM1's video path is
-  `rkipc` on Rockchip with an LT6911C/GSV1127X bridge. Nothing to port onto.
-- **One-KVM** — supports OneCloud, OEC/OECT, Phicomm N1, VMs. No RV-class
-  Rockchip, no RM1. Porting means rewriting exactly the video/HID glue GL.iNet
-  already published under GPLv3.
-- **Modified GLKVM** — the realistic option, and it is the vendor's own workflow.
-
-If the goal is "different vendor" rather than "different software", that is a
-hardware swap: JetKVM (~$103, Go, fully open), PiKVM V4 Mini (~$270, GPLv3,
-IPMI/Redfish), Sipeed NanoKVM (~$70, check its security history), BliKVM v4.
-
-## Verify on .15
-
-In this order, all read-only except the last:
-
-1. Web UI → Toolbox → Terminal → Access (gets a shell without touching SSH keys)
-2. `cat /etc/glinet/gl-cloud.conf` — confirm the `enable` key exists as expected
-3. `ls /etc/init.d/` — confirm the S99 names match the list above
-4. `pgrep -a rtty; pgrep -a gl-cloud` — baseline what is running
-5. `cat /proc/gl-hw-info/model` — settles which board rev, and which HDMI bridge
-6. `diff` the on-device `site-packages/kvmd` against the v1.10.0 clone — tells
-   you whether `.13`/`.14`/`.15` are on 1.10.0 and what, if anything, ships
-   differently from the published tree
-7. Then, and only then, toggle the cloud off and re-check 4
-
----
-
-## OTA channel — queryable without a device, and it answers Stage 0
-
-`api/upgrade.py` builds these from `model` (read from `/proc/gl-hw-info/model`,
-value is `rm1`, lowercase — `RM1`/`gl-rm1` 404):
-
-| URL | Content |
-| --- | --- |
-| `.../kvm/rm1/release/version` | plain-text version stanza |
-| `.../kvm/rm1/release/update.img` | the release image |
-| `.../kvm/rm1/testing/list-sha256.txt` | **beta index, with sha256 + size** |
-| `.../kvm/rm1/testing/metadata_{version}` | per-version metadata |
-
-`https://fw.gl-inet.com/kvm/rm1/release/version` returns:
-
-```
-RK_MODEL=RM1
-RK_VERSION=V1.3.0 release1
-RK_OTA_HOST=172.16.21.205:8080
-```
-
-Three things fall out of that:
-
-1. **`RK_*` is Rockchip's OTA format.** Confirms the SoC family and tells us the
-   image is a Rockchip `update.img` container — a known format with existing
-   tooling (`rkdeveloptool`, `imgRePackerRK`), not a bespoke GL.iNet blob.
-   That is a much better starting point than "unknown encrypted image".
-2. **`RK_OTA_HOST=172.16.21.205:8080` is an RFC1918 address** — GL.iNet's
-   internal build server, leaked into the public release channel. Harmless to
-   us, unreachable, but it confirms the file is emitted by their build system
-   rather than hand-written.
-3. **The release channel is stale.** V1.3.0, `update.img` last modified
-   2025-07-02. Beta is far ahead.
-
-### Available images (from `testing/list-sha256.txt`)
-
-| Version | File | Size | sha256 |
-| --- | --- | --- | --- |
-| 1.10.0 | `glkvm-RM1-1.10.0-0710-1783648193.img` | 189,694,488 (181 MB) | `8a46739a36b4c8bc6b8f195697fca725dd291ee88793e68cc9dfbc2c9a75ba49` |
-| 1.7.0 | `glkvm-RM1-1.7.0-1107-1762486370.img` | 274,010,584 (261 MB) | `6857bfc86cd850269bc8f6db12ffd707312c7161705e72bcad0c24889cd3f9d3` |
-| 1.3.0 | `release/update.img` | 232,298,968 (222 MB) | not published |
-
-Trailing number is an epoch: 1.10.0 = 2026-07-10, 1.7.0 = 2025-11-07.
-Firmware version tracks the kvmd version — the GitHub repo's HEAD is 1.10.0,
-matching the newest beta image.
-
-Note 1.10.0 is **72 MB smaller** than 1.7.0. Worth knowing before diffing them;
-that is a packaging or content change, not noise.
-
-**Published sha256s change Stage 0 for the better** — a downloaded image can be
-verified against the vendor's own hash, so "is this dump good?" stops being a
-question for the vendor images at least.
-
-### Which build is on which unit — still open
-
-The unauthenticated endpoints leak no version. All three units answer
-byte-identically on `/api/init/is_inited` (`is_inited: true`, empty
-`country_code`), `/api/redfish/v1`, and `/api/2fa/is_enabled` (2FA off
-everywhere). `/api/info` is 401 as before, `/api/init/init` is Forbidden.
-
-The only discriminator remains the web bundle hash, re-confirmed 2026-09-01:
-
-| Units | Bundle |
-| --- | --- |
-| `.13`, `.14` | `index-SI23g4RB.js` |
-| `.15` | `index-CddyYr6q.js` |
-
-Reading the version from each UI (or the terminal) is still the way to settle
-it. Downloading 1.7.0 and 1.10.0 and comparing their bundle hashes against the
-two observed would settle it *without* logging in — that is the cheap
-experiment if UI access is inconvenient.
-
-### Minor security observation
-
-`/api/redfish/v1` is served unauthenticated on all three. It only exposes the
-service root, and `/redfish/v1/Systems` requires auth, so the exposure is
-version-fingerprinting rather than control. Still, it is reachable from anything
-that can see the LAN address, and it is the kind of thing to close if these
-ever face a less-trusted network.
-
----
-
-## GLKVM vs upstream PiKVM — what was actually changed
-
-Compared `gl-inet/glkvm@3e8dd23` against `pikvm/kvmd@387846d` (2026-08-31).
-
-**Fork point: kvmd `4.82`.** Upstream is now `4.213` — 131 releases ahead.
-That drift, not deliberate removal, explains almost every gap.
-
-### GL.iNet added a lot; they removed almost nothing
-
-23 new API modules on top of upstream's 12:
-
-```
-ap  astrowarp  cloudflare  common  config_utils  custom_screen  fingerbot
-init  modem  netbird  netbird_daemon  recorder  redfish  repeater  rndis
-serial  system  tailscale  turn  twofa  upgrade  wol  zerotier
-```
-
-Several are lifted straight from GL.iNet's router stack (`ap`, `modem`,
-`repeater`, `rndis`). Plugin-side additions: `atx/glatx.py` (their ATX board)
-and `hid/otg/touch.py` (touchscreen HID).
-
-Missing versus upstream — all of it plausibly post-4.82 upstream work rather
-than anything GL.iNet stripped:
-
-```
-apps/nbd  apps/override  apps/_scheme.py  apps/_logging.py
-plugins/auth/onetime.py  plugins/msd/otg/fs.py
-plugins/ugpio/amt.py  plugins/ugpio/noop.py
-```
-
-**Conclusion: GLKVM is PiKVM 4.82 plus a large GL.iNet layer, not a cut-down
-PiKVM.** The upstream backend is essentially all still there.
-
-### Which means the interesting features are present but unexposed
-
-Still in the shipped tree, almost certainly not surfaced by GL.iNet's Vue UI:
-
-| Capability | Where |
-| --- | --- |
-| **VNC server** | `kvmd/apps/vnc/`, `/etc/kvmd/vncpasswd`, SSL under `/etc/kvmd/vnc/ssl/` |
-| **IPMI server** (ipmitool-compatible) | `kvmd/apps/ipmi/`, `/etc/kvmd/ipmipasswd` |
-| **LDAP / PAM / RADIUS auth** | `plugins/auth/{ldap,pam,radius}.py` |
-| **~20 ugpio power/switch drivers** | `plugins/ugpio/` — tesmart, extron, ezcoo, hue, anelpwr, wol, ipmi… |
-| **TOTP 2FA** | `plugins/…`, `/etc/kvmd/user/totp.secret` |
-
-### The lever: `/etc/kvmd/override.yaml` survived
-
-The PiKVM override mechanism is intact. `PKGBUILD:145,197` installs both
-`/etc/kvmd/override.yaml` and `/etc/kvmd/override.d/`, and
-`kvmd/apps/__init__.py:205` merges the `override` section after all other
-configs and `!include`s, before validation. GL.iNet's own shipped
-`override.yaml` still carries the upstream comment block pointing at
-`docs.pikvm.org`, with a **VNC example** in it.
-
-So the third alternative — alongside "modify kvmd" and "swap hardware" — is:
-
-> **Keep the stock firmware entirely and just write `/etc/kvmd/override.yaml`.**
-
-No code changes, no reflash, no `apply_to_glkvm.sh`, survives as a plain config
-file. Standard PiKVM documentation applies, with the caveat that it describes
-4.213 and these units run a 4.82 base — check each option exists in the local
-tree before relying on it.
-
-### One notable gap in what's published
-
-`configs/kvmd/main/` contains **only upstream's Raspberry Pi platform files**
-(`v0`–`v4plus` × `rpi2/3/4/zero2w`). There is no RM1 platform YAML in the repo.
-The RM1's real `main.yaml` — the file that describes its actual HID, streamer
-and ATX wiring — ships only inside the firmware image.
-
-That is the strongest remaining reason to pull an image: not to modify it, but
-to read one config file that was left out of the source release.
-
----
-
-## The classic PiKVM UI: in the source, not on the device
-
-The repo's `web/` is upstream PiKVM's classic interface, essentially unchanged —
-identical top-level structure to `pikvm/kvmd@387846d` (`base.pug`, `index.pug`,
-`kvm/`, `vnc/`, `ipmi/`, `login/`, `share/`).
-
-nginx serves it from `root /usr/share/kvmd/web` at `location /`
-(`configs/nginx/*.conf:15`). But on `.15`, every classic path 404s:
-
-```
-/            HTTP 200  len=1043    <- Vue SPA shell
-/kvm/        HTTP 404
-/vnc/        HTTP 404
-/ipmi/       HTTP 404
-/login/      HTTP 404
-/share/      HTTP 404
-```
-
-So GL.iNet **replaced the contents of `/usr/share/kvmd/web` with their Vue
-build** rather than mounting it elsewhere. The classic UI is published under
-GPLv3 but is not installed.
-
-Restoring it is therefore a build-and-deploy job, not a toggle: the `web/` tree
-is pug templates needing a build step, and it would collide with the Vue app at
-`location /`, so it wants its own nginx location. Feasible, not free.
-
-Two consequences:
-
-- The Vue frontend (`gl-kvm-frontend`) is **not** in the GPL release, so the
-  observed bundle hashes (`index-SI23g4RB.js` / `index-CddyYr6q.js`) cannot be
-  matched against source. Settling which build is on which unit still needs
-  either the UI/terminal or a downloaded image.
-- `/redfish` and `/streamer` have their own nginx locations
-  (`:118`, `:127`) — consistent with the unauthenticated Redfish root observed
-  on all three units.
-
----
-
-## Artifacts now in the repo (2026-09-01)
-
-```
-firmware/    3 images, 665 MB, + SHA256SUMS + fetch.sh
-vendor/      glkvm @3e8dd23 (1.10.0) and pikvm-kvmd @387846d (v4.213)
-tools/       apply_to_glkvm_safe.sh, override.yaml.example
-```
-
-Both beta images verified against the vendor's own `list-sha256.txt` at
-download time — `sha256sum -c` passes. The release-channel image publishes no
-hash; its digest is recorded in `SHA256SUMS` so future pulls can be compared
-against this copy.
-
-**Stage 0 recovery is now satisfied**: three known-good, hash-verified vendor
-images are held locally, covering 1.3.0, 1.7.0 and 1.10.0.
-
-### Correction: VNC does not need memsink
-
-An earlier note in `tools/override.yaml.example` claimed VNC might show no
-video without `vnc.memsink.*.sink` values from the unpublished `main.yaml`.
-That was wrong. `kvmd/apps/vnc/__init__.py:47-56`:
-
-```python
-streamers = list(filter(None, [
-    make_memsink_streamer("h264", StreamerFormats.H264),   # None if sink == ""
-    make_memsink_streamer("jpeg", StreamerFormats.JPEG),   # None if sink == ""
-    HttpStreamerClient(name="JPEG", ..., **config.streamer._unpack()),
-]))
-```
-
-The `HttpStreamerClient` is appended **unconditionally** and defaults to
-`/run/kvmd/ustreamer.sock`. Memsink entries simply drop out of the list when
-unset. So VNC works with no memsink config; memsink is an H.264/zero-copy
-optimisation, not a prerequisite.
-
-This removes the main reason to think enabling VNC by config alone would fail.
-The remaining unknown is CAVEAT 1 — whether anything on a buildroot-init device
-actually *starts* `kvmd-vnc`, since the repo ships systemd units the RM1 will
-not use.
-
----
-
-# Image opened. Most of PLAN.md's open questions are now closed.
-
-Unpacked `glkvm-RM1-1.10.0-0710-1783648193.img` locally — no device access, no
-decrypter, **no encryption at all**. It is a stock Rockchip `RKFW` container.
-
-## Container structure
-
-```
-0x0000000  RKFW header (0x66 bytes)
-0x0000066  BOOT / loader
-0x00469b4  RKAF embedded update image   model=RM1 id=007 manufacturer=RV1126
-0x008e9b4  PARM  partition table (plain text)
-0x01d251b4 rootfs — squashfs v4.0, zstd, 13089 inodes, 128K blocks
-```
-
-`tools/rkfw_scan.py` reproduces this on any of the three images.
-
-**The "two decrypters" problem in PLAN.md does not exist for this image.** There
-was nothing to decrypt. Whatever the earlier attempt hit, it was not packaging
-encryption on the vendor `update.img`.
-
-## SoC confirmed: Rockchip RV1126
-
-From the RKAF header and `PARM`: `MANUFACTURER: RV1126`, `MACHINE_MODEL: RM1`,
-`FIRMWARE_VER: 8.1`, `TYPE: GPT`. Not a guess any more.
-
-### Partition map
+| SoC | **Rockchip RV1126** | [source] RKAF header `MANUFACTURER: RV1126` |
+| Model string | `rm1` (lowercase) | [measured] `RM1`/`gl-rm1` 404 on the OTA host |
+| Init | buildroot `/etc/init.d/S<NN><name>` | [measured] from the unpacked rootfs |
+| …but also | OpenWrt's `ubus`, `/etc/glinet/` | [source] `ubus call gl-cloud unbind` |
+| SSH | dropbear 2025.89, port 22 | [measured] banner on all three |
+| Python | 3.12, kvmd in `site-packages` | [source] `apply_to_glkvm.sh` |
+| rootfs | read-only squashfs + **overlay** | [measured] `S22overlayfs` present |
+| Capture bridge | **LT6911C**, i2c-1 addr 0x2b | [source] `upgrade.py:881` |
+| HDMI loop-out | LT86102SXE splitter | [source] `main.yaml` pre/post-start cmds |
+| Streamer | `ustreamer` on `/dev/video0` | [source] `main.yaml` |
+
+Not OpenWrt, not plain buildroot — a GL.iNet hybrid. **Do not assume `uci` or
+`opkg` work.**
+
+On the capture bridge: `upgrade.py:876-881` maps `rm10rc`/`rm4pe` → GSV1127X and
+`rmq1` → GSV1127, then falls back to `LT6911C` for anything else. `rm1` is not
+in the map, so the RM1 takes the LT6911C path. (`/etc/kvmd/tc358743-edid.hex`
+also ships, but the TC358743 is upstream PiKVM's bridge — a leftover, not this
+board's hardware.)
+
+### Partition map [source]
+
+From the `PARM` block of the 1.10.0 image:
 
 | Partition | Image | Flash off | Size |
 | --- | --- | --- | --- |
@@ -417,121 +72,29 @@ From the RKAF header and `PARM`: `MANUFACTURER: RV1126`, `MACHINE_MODEL: RM1`,
 | oem | `oem.img` | 0xb8000 | 6 MB |
 | userdata | `userdata.img` | 0x118000 | 5 MB |
 
-Offsets in `firmware/partitions-1.10.0.json`; extracted rootfs in
-`extracted/rootfs-1.10.0.squashfs`, configs in `extracted/rootfs-1.10.0/`.
-
-## PLAN.md open questions — answered
-
-**3. OpenWrt-derived or custom Linux?** Neither, exactly: buildroot with
-GL.iNet's OpenWrt pieces bolted on (`S81ubus`, `/etc/glinet/`). Busybox init.
-
-**4. Is the root filesystem writable?** rootfs is read-only squashfs, **but
-`/etc/init.d/S22overlayfs` exists** — there is a writable overlay. Live edits
-are viable, which is what the plan hoped for. `S10atomic_commit.sh` and
-`S99_bootcontrol` suggest atomic/A-B update handling, so verify how an overlay
-change survives an OTA before relying on it.
-
-## `/etc/kvmd/main.yaml` — the file that was not published
-
-```yaml
-override: !include [override.d, user/boot.yaml, override.yaml]
-kvmd:
-    hid:  {type: otg, mouse_alt: {device: /dev/hidg2}}
-    atx:  {type: glatx}
-    msd:  {type: otg}
-    streamer:
-        cmd: [/usr/bin/ustreamer, --device=/dev/video0, -r 1920x1080, ...]
-vnc:
-    memsink:
-        jpeg:   {sink: "kvmd::ustreamer::jpeg"}
-        h264:   {sink: "kvmd::ustreamer::h264"}
-        rv1126: {sink: "kvmd::ustreamer::rv1126"}
-```
-
-Its own header: *"Don't touch this file otherwise your device may stop working.
-Use override.yaml to modify required settings."*
-
-Two things follow:
-
-1. **The override route is confirmed live** — `override.yaml` is included by
-   main.yaml, exactly as hoped.
-2. **The VNC memsink caveat is dead.** The sinks are already wired, including an
-   `rv1126` one. VNC gets hardware-encoded video with no configuration from us.
-
-`/etc/glinet/gl-cloud.conf` ships as `{"enable": true, "log_level": "INFO"}` —
-the cloud is on out of the box, and the toggle writes exactly this file.
-
-## VNC and IPMI: present, but nothing starts them
-
-On the device:
-
-```
-/usr/bin/kvmd-vnc      Python wrapper -> kvmd.apps.vnc:main
-/usr/bin/kvmd-ipmi     Python wrapper -> kvmd.apps.ipmi:main
-/usr/bin/ipmitool      the client, too
-/etc/kvmd/vncpasswd    ships, comments only (so VNCAuth is inert)
-/etc/kvmd/ipmipasswd   ships, comments only
-```
-
-But `/etc/init.d/` has **no `S99kvmd-vnc` and no `S99kvmd-ipmi`**. That is the
-only thing standing between the stock firmware and a working VNC/IPMI server.
-
-`tools/S99kvmd-vnc` and `tools/S99kvmd-ipmi` supply the missing scripts, in the
-house style of `S98kvmd`, each gated on a flag file so a reboot cannot surprise
-you with a new listener.
-
-### Full `/etc/init.d/` inventory (1.10.0)
-
-Cloud/remote: `S99gl-cloud` `S99rtty` `S99tailscale` `S99netbird` `S99zerotier`
-`S99cloudflare` `S99gl-pion` `S99gl-route-monitor`
-KVM core: `S98kvmd` `S98kvmd-media` `S99kvmd-janus` `S99kvmd-nginx`
-`S50kvmd-otg` `S97kvmd-rndis` `S46kvmd-network`
-Access: `S50dropbear` `S80ttyd` `S81ubus` `S79mdnsd` `S80mDNSResponder`
-Also present: `S59snmpd`, `S22overlayfs`, `S10atomic_commit.sh`,
-`S99_bootcontrol`, `S99_auto_reboot`, `S24glhwinfo`, `S23hdmi`.
-
-`S59snmpd` is worth a look on its own — an SNMP daemon nobody mentions.
-
-## Revised recommendation
-
-For "alternative options", the answer is now concrete and needs no reflashing:
-
-1. Drop `tools/override.yaml.example` at `/etc/kvmd/override.yaml`
-2. Install `tools/S99kvmd-vnc` / `tools/S99kvmd-ipmi`, `touch` their gate files
-3. Add credentials to `/etc/kvmd/vncpasswd` / `ipmipasswd`
-4. Disable the cloud via the UI toggle, verify `rtty` is down, keep the egress rule
-
-That yields VNC + IPMI + a de-clouded unit on stock firmware, all reversible,
-with three hash-verified vendor images held locally if anything goes wrong.
+Also from `PARM`: `FIRMWARE_VER: 8.1`, `TYPE: GPT`.
 
 ---
 
-# Correction, and the best finding of the lot
+## Route 1 — the classic PiKVM UI (start here)
 
-## I was wrong: both front ends ship, side by side
-
-Earlier this file said GL.iNet "replaced the contents of `/usr/share/kvmd/web`
-with their Vue build". **That is wrong.** The rootfs contains both:
+**Both front ends ship on the device** [measured]:
 
 ```
-/usr/share/kvmd/web      classic PiKVM UI  (base.pug, kvm/, vnc/, ipmi/, login/)
-/usr/share/kvmd/glweb    GL.iNet Vue app   (assets/index-*.js)
+/usr/share/kvmd/web      classic PiKVM UI   — index.html, kvm/, vnc/, ipmi/, login/
+/usr/share/kvmd/glweb    GL.iNet's Vue app  — assets/index-*.js
 ```
 
-and both nginx server contexts to serve them:
+and both nginx server contexts to serve them [measured]:
 
 ```
 /etc/kvmd/nginx/kvmd.ctx-server.conf   root /usr/share/kvmd/web
 /etc/kvmd/nginx/gl.ctx-server.conf     root /usr/share/kvmd/glweb
 ```
 
-The classic paths 404 on the live device only because the active nginx config
-does not include that context — not because the files are absent.
-
-## The classic PiKVM UI is shipped, commented out, on port 8888
-
-nginx runs as `nginx -p /etc/kvmd/nginx -c /etc/kvmd/nginx-kvmd.conf`
-(`S99kvmd-nginx:58`). That file contains, verbatim:
+The classic paths 404 on a live unit [measured] — but **not** because the files
+are missing. nginx runs `-c /etc/kvmd/nginx-kvmd.conf` (`S99kvmd-nginx:58`),
+which serves `gl.ctx-server.conf` on 443 and carries this, commented out:
 
 ```nginx
 #        server {
@@ -543,188 +106,158 @@ nginx runs as `nginx -p /etc/kvmd/nginx -c /etc/kvmd/nginx-kvmd.conf`
 #                include /usr/share/kvmd/extras/*/nginx.ctx-server.conf;
 #                location /connect { return 301 /; }
 #        }
-
-        server {
-                listen 443 ssl;
-                ...
-                include /etc/kvmd/nginx/gl.ctx-server.conf;
-        }
 ```
 
-GL.iNet left the entire classic-UI server block in place and simply commented
-it out. **Uncommenting eight lines exposes the full PiKVM interface on 8888,
-with the Vue app untouched on 443.**
+Uncommenting it puts the full classic UI on 8888 with the Vue app untouched
+on 443.
 
-That is the cleanest answer to "are there alternative options" in the whole
-investigation: the alternative interface is already installed, already
-configured, and disabled by a `#`.
+The UI is **genuinely built**, not source-only [measured]: `/usr/share/kvmd/web`
+holds 5 `.html`, 35 `.js`, 25 `.css`, 30 `.svg`, 5 `.png`, a `.webmanifest` and
+a favicon; `index.html` opens with PiKVM's own header. The 24 `.pug` files are
+sources shipped alongside the built output. All 30 `include` directives in
+`kvmd.ctx-server.conf` resolve to files present in the rootfs [measured].
 
-`tools/enable_classic_ui.sh <ip>` does it — backs up the file first, edits with
-awk (idempotent), runs `nginx -t`, restores the backup if validation fails, and
-supports `--revert`.
+`tools/enable_classic_ui.sh <ip>` does it: backs up, edits with awk, runs
+`nginx -t`, restores the backup on failure, `--revert` to undo. The awk was
+tested against the real 1.10.0 config — braces balance 16/16, 8888 live, 443
+untouched, second run a no-op. **[untested] against the units**, which run a
+different build.
 
-Note the classic UI has its own `/vnc/` and `/ipmi/` pages, which pair with the
-VNC/IPMI daemons that `tools/S99kvmd-{vnc,ipmi}` start.
+---
 
-## Which build is on which unit: still unresolved, now with evidence
+## Route 2 — VNC and IPMI by config
 
-Compared the `glweb` bundle names in all three vendor images against what the
-units actually serve:
+Present on the device, unexposed [measured]:
 
-| Image | bundles |
+```
+/usr/bin/kvmd-vnc      Python wrapper -> kvmd.apps.vnc:main
+/usr/bin/kvmd-ipmi     Python wrapper -> kvmd.apps.ipmi:main
+/usr/bin/ipmitool      the client too
+/etc/kvmd/vncpasswd    ships, comments only (so VNCAuth is inert)
+/etc/kvmd/ipmipasswd   ships, comments only
+```
+
+**The only thing missing is an init script** — `/etc/init.d/` contains no
+`S99kvmd-vnc` and no `S99kvmd-ipmi` [measured]. `tools/S99kvmd-vnc` and
+`tools/S99kvmd-ipmi` supply them in the house style of `S98kvmd`, each gated on
+`/etc/kvmd/user/{vnc,ipmi}.enable` so a reboot cannot surprise you.
+
+The override mechanism is live. `/etc/kvmd/main.yaml` opens with [measured]:
+
+```yaml
+override: !include [override.d, user/boot.yaml, override.yaml]
+```
+
+and its own header says *"Don't touch this file otherwise your device may stop
+working. Use override.yaml to modify required settings."* `PKGBUILD:145,197`
+installs both `override.yaml` and `override.d/`; the merge happens at
+`kvmd/apps/__init__.py:205`, after all other configs and `!include`s.
+
+**VNC needs no memsink configuration from you** — `main.yaml` already sets
+them [measured]:
+
+```yaml
+vnc:
+    memsink:
+        jpeg:   {sink: "kvmd::ustreamer::jpeg"}
+        h264:   {sink: "kvmd::ustreamer::h264"}
+        rv1126: {sink: "kvmd::ustreamer::rv1126"}
+```
+
+So VNC gets hardware-encoded video out of the box. Independently,
+`kvmd/apps/vnc/__init__.py:47-56` appends an `HttpStreamerClient`
+unconditionally, so it would still get JPEG over `/run/kvmd/ustreamer.sock`
+even with no memsink at all.
+
+`tools/override.yaml.example` is a starter using only options verified present
+in this 4.82-era tree.
+
+**On IPMI:** the device's own `/etc/kvmd/ipmipasswd` warns that the protocol is
+unsafe by design — the server sends a hash of the requested user's password to
+the client *before* the client authenticates. Enable only on a trusted network,
+never with a reused password.
+
+### What else is in there but unexposed
+
+GLKVM forked PiKVM `kvmd` at **4.82**; upstream is now **4.213** [source].
+GL.iNet **added** 23 API modules and removed essentially nothing — the gaps
+(`apps/nbd`, `apps/override`, `auth/onetime.py`, `ugpio/amt.py`,
+`msd/otg/fs.py`) are all post-4.82 upstream work. So also present:
+
+| Capability | Where |
 | --- | --- |
-| 1.3.0 | `index-B8Luf3Jz.js` `index-BSr0T-4M.js` `index-CZ82wUA8.js` |
-| 1.7.0 | `index-BitRlry9.js` `index-COsSr8yH.js` `index-OsZ6zXfv.js` |
-| 1.10.0 | `index-DoTFM32C.js` `index-eqq7oJ5H.js` `index-ufafOX6U.js` |
-| **observed** | `index-SI23g4RB.js` (`.13`/`.14`), `index-CddyYr6q.js` (`.15`) |
+| LDAP / PAM / RADIUS auth | `plugins/auth/{ldap,pam,radius}.py` |
+| ~20 power/switch drivers | `plugins/ugpio/` — tesmart, extron, ezcoo, hue, anelpwr, wol, ipmi… |
+| TOTP 2FA | `/etc/kvmd/user/totp.secret` |
 
-**No match.** All three units run a build that is none of 1.3.0, 1.7.0 or
-1.10.0 — i.e. something in the gaps (1.4–1.6, 1.8–1.9), which the testing
-channel no longer lists. The vendor only publishes two betas at a time.
-
-So this question cannot be closed from the vendor images. It needs the UI or a
-shell — one `cat /etc/os-release` or the About page settles it.
-
-Consequence worth noting: **both units are on firmware GL.iNet no longer
-distributes.** The three local images are therefore not exact restore points
-for the current state; they are recovery targets that would move the units to a
-different version. Pull each unit's own `rootfs` via `dd` before modifying it if
-byte-exact rollback matters.
+GL.iNet's own additions include `ap`, `modem`, `repeater`, `rndis` (lifted from
+their router stack), plus `astrowarp`, `recorder`, `custom_screen`, `twofa`,
+`upgrade`, and clients for Tailscale / NetBird / ZeroTier / Cloudflare.
 
 ---
 
-## Verification of `enable_classic_ui.sh` (and a bug it caught)
+## Route 3 — modify kvmd itself
 
-The first draft of the script keyed block termination on
-`/^#[[:space:]]*\}[[:space:]]*$/`. Tested against the real 1.10.0
-`nginx-kvmd.conf`, that **terminated on the inner `location /connect {` closing
-brace**, uncommenting lines 1–11 of the block but leaving the server block's own
-`#        }` commented — an unclosed `server {`. `nginx -t` would have rejected
-it and the script's own rollback would have fired, so it was fail-safe, but the
-feature would simply not have worked.
+GL.iNet publishes the daemon at <https://github.com/gl-inet/glkvm> (GPLv3), with
+`apply_to_glkvm.sh` to push a modified tree [source]:
 
-Fixed to track **brace balance of the stripped text**. Verified end-to-end
-against the exact copy embedded in the shipped script:
-
-```
-braces balanced : True (16/16)
-8888 live       : True
-443 still live  : True
-second run      : no-op (idempotent)
+```sh
+REMOTE_HOST="glkvm.local"
+REMOTE_DIR="/usr/lib/python3.12/site-packages/kvmd"
+ssh root@glkvm.local "rm $REMOTE_DIR/* -R"     # destructive, runs BEFORE the copy
+scp -r -P 22 kvmd/* root@glkvm.local:$REMOTE_DIR/
 ```
 
-Two supporting checks:
+Two hazards:
 
-- **The classic UI is genuinely built**, not pug-only —
-  `/usr/share/kvmd/web` holds 5 `.html` (root, `kvm/`, `ipmi/`, …), 35 `.js`,
-  25 `.css`, 30 `.svg`, 5 `.png`, a `.webmanifest` and a favicon. The 24 `.pug`
-  files are sources shipped alongside the built output. `index.html` opens with
-  PiKVM's own header comment.
-- **All 30 `include` directives** in `kvmd.ctx-server.conf` resolve to files
-  that exist in the rootfs (`loc-login`, `loc-proxy`, `loc-websocket`,
-  `loc-bigpost`, `loc-nobuffering`, `loc-nocache`, `loc-cors`).
+- It `rm -R`s the remote directory **before** copying. A failed scp leaves the
+  device with no kvmd.
+- It targets `glkvm.local` **by hostname**. With three units on one LAN, mDNS
+  resolves to whichever answers first.
 
-So the block is safe to enable, and there is a working UI behind it.
-
-### Still untested
-
-Everything above is verified against the *extracted 1.10.0 image*. None of it
-has been run against `.13`/`.14`/`.15`, which are on an unidentified build that
-is **not** 1.3.0, 1.7.0 or 1.10.0. Their `nginx-kvmd.conf` may differ. The
-script backs up, validates with `nginx -t`, and restores on failure, so a
-mismatch should be non-destructive — but it is a real possibility, not a
-theoretical one.
-
-Also unverified: whether SSH key auth is set up for `root@` on these units. Every
-script here uses `BatchMode=yes` (key only, never a password prompt).
+`tools/apply_to_glkvm_safe.sh` replaces it: refuses anything but a bare IPv4
+literal, backs the remote tree up and pulls the archive locally, stages the
+upload, and only then swaps — with rollback. **[untested] against the units.**
 
 ---
 
-## Hard blocker found: SSH key auth is not set up
+## Route 4 — modify the firmware image
 
-Tested against `.15` and `.13`:
-
-```
-root@192.0.2.15: Permission denied (publickey,password).
-root@192.0.2.13: Permission denied (publickey,password).
-```
-
-Password auth is offered, but every script in `tools/` uses
-`ssh -o BatchMode=yes` (key only, never a password prompt), so **none of them
-can run until a key is installed**.
-
-### The device hands you a root shell anyway
-
-`/etc/init.d/S80ttyd` runs `ttyd` on a unix socket, proxied by nginx at:
+**The vendor image is not encrypted** [measured]. It is a stock Rockchip `RKFW`
+container, opened locally with plain parsing and no keys:
 
 ```
-/extras/webterm/ttyd        ->  https://<unit-ip>/extras/webterm/ttyd
+0x0000000  RKFW header (0x66 bytes)
+0x0000066  BOOT / loader
+0x00469b4  RKAF   model=RM1 id=007 manufacturer=RV1126
+0x008e9b4  PARM   partition table (plain text)
+0x01d251b4 rootfs — squashfs v4.0, zstd, 13089 inodes, 128K blocks
 ```
 
-behind `loc-login.conf`, i.e. gated by the normal KVMD login. The ttyd command
-line ends in `bash`, running as root. That is the same thing the UI's
-Toolbox → Terminal → Access button opens.
+`tools/rkfw_scan.py` reproduces this on any of the three images.
 
-So SSH is a convenience, not a prerequisite. `tools/webterm-snippets.md` holds
-paste-ready blocks for that terminal, covering: baseline capture (which settles
-the build question), enabling the classic UI, de-clouding, installing an SSH
-key, and starting VNC/IPMI.
+PLAN.md's "two decrypters, the second one works" does not apply to the vendor
+`update.img`. Whatever that earlier attempt hit, it was not packaging encryption
+on this file.
 
-The awk in those snippets was extracted back out of the markdown and re-run
-against the real 1.10.0 config — byte-identical output to the tested version in
-`enable_classic_ui.sh`.
+### Signing: added in 1.10.0, with a bypass in the same release
 
-## Persistence caveat
+| Image | `ED25` in RKFW header | `/etc/firmware/key/public.raw` |
+| --- | --- | --- |
+| 1.3.0 | absent | absent |
+| 1.7.0 | absent | absent |
+| 1.10.0 | **present** (offset 0x29) | **present** |
 
-`S22overlayfs` gives `/etc` a writable overlay over the read-only squashfs, so
-edits survive reboots. But `S10atomic_commit.sh` and `S99_bootcontrol` point at
-atomic/A-B update handling — **assume an OTA discards all of it** and plan to
-re-apply after any firmware update. That, not the config edits themselves, is
-the argument for eventually going the image-modification route.
+Two independent signals, same conclusion [measured].
 
----
+`POST /api/upgrade/start` runs two gates [source, `api/upgrade.py:721+`]:
 
-# Stage 4 answered: signed since 1.10.0, with a supported bypass
+1. `verify_firmware_signature()` (`:1212`) → `fwtools verify /userdata/update.img
+   /etc/firmware/key/public.raw` — Ed25519 against an on-device public key
+2. `validate_firmware()` (`:1281`) → `check_image_validity <img>` — a Rockchip
+   structural/CRC check, **not** cryptographic
 
-PLAN.md's decisive question was *"Does the updater verify a signature, or only
-decrypt? If it does not check a signature, a modified image installs."*
-
-## Signing was introduced between 1.7.0 and 1.10.0
-
-The `ED25` (Ed25519) marker in the RKFW header, at offset 41:
-
-| Image | `ED25` at 0x29 |
-| --- | --- |
-| 1.3.0 | **absent** |
-| 1.7.0 | **absent** |
-| 1.10.0 | **present** (`45 44 32 35 01 00 00 00`) |
-
-So GL.iNet added firmware signing in that window. Anything written assuming the
-older unsigned images still applies to 1.3.0/1.7.0 but not to current builds.
-
-## How it is checked
-
-`POST /api/upgrade/start` (`api/upgrade.py:721+`) runs two independent gates
-before flashing:
-
-```python
-signature_result = await self.__update_engine.verify_firmware_signature()
-validation_result = await self.__update_engine.validate_firmware()
-if not signature_valid or not firmware_valid:
-    return ... "Upgrade failed"
-```
-
-- **`verify_firmware_signature()`** (`:1212`) shells out to
-  `fwtools verify /userdata/update.img /etc/firmware/key/public.raw`
-  — Ed25519 against an on-device public key. Returns `error` (not `invalid`)
-  if either the image or the key file is missing.
-- **`validate_firmware()`** (`:1281`) shells out to
-  `check_image_validity /userdata/update.img` — a Rockchip structural/CRC
-  check, **not** cryptographic.
-
-## The bypass is a query parameter
-
-`api/upgrade.py:729-743`:
+And the bypass, `api/upgrade.py:729-743`:
 
 ```python
 skip_verify = request.query.get("skip_verify")
@@ -732,92 +265,222 @@ should_skip_verify = str(skip_verify).lower() in ["true", "1"]
 ...
 if should_skip_verify:
     get_logger(0).warning("Skipping firmware signature verification as requested")
-else:
-    signature_result = await self.__update_engine.verify_firmware_signature()
 ```
 
-So:
+So `POST /api/upgrade/start?skip_verify=true` skips gate 1 entirely, logging a
+warning. Ordinary authenticated endpoint — no debug mode, recovery boot, or
+hardware access. Gate 2 still runs and is not skippable, but a correctly
+repacked RKFW image satisfies it by construction. (`if self.__model == "rmq1":
+pass` skips both gates for that model — not RM1.)
 
-```
-POST /api/upgrade/start?skip_verify=true
-```
-
-skips the Ed25519 check entirely, logging a warning and nothing more. It is an
-ordinary authenticated endpoint — admin credentials, no debug mode, no recovery
-boot, no hardware access.
-
-`validate_firmware()` still runs and is **not** skippable. But it is a structural
-check, which a correctly repacked RKFW image satisfies by construction.
-
-There is also a blanket exemption a few lines above: `if self.__model == "rmq1":
-pass` skips both gates for that model. Not RM1, but it shows the checks are
-treated as advisory rather than load-bearing.
-
-## What this means for the project
-
-**A modified image installs through the normal update path**, provided it is
-repacked into a structurally valid RKFW container. The signing added in 1.10.0
-does not close the modification route — the bypass ships in the same release.
-
-That retires the last risk in PLAN.md's Stage 4. The remaining work for the
-image route is purely mechanical: repack RKFW/RKAF with a correct partition
-table and CRCs so `check_image_validity` passes.
-
-Ranked against the alternatives, though, this is still the *last* resort:
-
-| Route | Cost | Survives OTA |
-| --- | --- | --- |
-| `override.yaml` + init scripts | minutes, reversible | no — re-apply |
-| nginx uncomment (classic UI) | seconds, reversible | no — re-apply |
-| `apply_to_glkvm_safe.sh` (kvmd code) | minutes, reversible | no — re-apply |
-| **repack + `skip_verify=true`** | hours | **yes** |
-
-The image route is the only one that survives a firmware update, which is
-exactly the argument `S10atomic_commit.sh` / `S99_bootcontrol` raised earlier.
-Worth doing eventually; not worth doing first.
+**A modified image installs by the normal path.** Signing did not close this.
 
 ---
 
-## Version diff: 1.7.0 → 1.10.0
+## De-clouding
+
+GL.iNet's cloud is internally **astrowarp** [source, `api/astrowarp.py`]:
+
+| Path | What it is |
+| --- | --- |
+| `/etc/init.d/S99gl-cloud` | the cloud daemon |
+| `/etc/glinet/gl-cloud.conf` | JSON, `enable` key — ships as `{"enable": true, "log_level": "INFO"}` [measured] |
+| `/etc/init.d/S99rtty` | **rtty — a remote *shell* tunnel** |
+| `/var/run/cloud/{bindinfo,bindlink,dynamic_code}` | pairing state |
+
+`GET /api/astrowarp/enable?enable=false` sets `enable: false`, then stops
+`S99gl-cloud` and `S99rtty`. `POST /api/astrowarp/unbind` runs
+`ubus call gl-cloud unbind`.
+
+**That is the whole de-cloud, and it is a supported UI toggle.** Verify `rtty`
+is actually down (`pgrep -a rtty`) rather than trusting it.
+
+Not covered by that toggle, so **keep the gateway egress rule**:
+
+- OTA — `https://fw.gl-inet.com/kvm/{model}/release` and `/testing`
+  (`api/upgrade.py:38-39`)
+- STUN — default `stun.l.google.com` (`apps/__init__.py:952`; `stun.gl-inet.cn`
+  if the country code is CN)
+
+### Built-in alternatives to the vendor cloud
+
+Each already shipped, with its own API module and init script:
+
+| Service | Module | Init script |
+| --- | --- | --- |
+| Tailscale | `api/tailscale.py` | `S99tailscale` |
+| NetBird | `api/netbird.py` | `S99netbird` |
+| ZeroTier | `api/zerotier.py` | `S99zerotier` |
+| Cloudflare Tunnel | `api/cloudflare.py` | `S99cloudflare` |
+| GLKVM-Cloud (self-hosted) | — | <https://github.com/gl-inet/glkvm-cloud> (Docker, x86_64) |
+
+---
+
+## Getting a shell
+
+**SSH key auth is not configured** [measured] — `.15` and `.13` both answer
+`Permission denied (publickey,password)`. Every script in `tools/` uses
+`ssh -o BatchMode=yes`, so none can run until a key is installed.
+
+No SSH is needed to get root. `S80ttyd` runs ttyd on a unix socket, proxied by
+nginx at `/extras/webterm/ttyd` behind the normal KVMD login, with `bash` as
+root — the same thing the UI's Toolbox → Terminal → Access button opens:
+
+```
+https://<unit-ip>/extras/webterm/ttyd
+```
+
+`tools/webterm-snippets.md` has paste-ready blocks for it, ordered least to most
+invasive, including installing an SSH key (which unblocks everything in `tools/`).
+
+### `/etc/init.d/` inventory (1.10.0) [measured]
+
+Cloud/remote: `S99gl-cloud` `S99rtty` `S99tailscale` `S99netbird` `S99zerotier`
+`S99cloudflare` `S99gl-pion` `S99gl-route-monitor`
+
+KVM core: `S98kvmd` `S98kvmd-media` `S99kvmd-janus` `S99kvmd-nginx`
+`S50kvmd-otg` `S97kvmd-rndis` `S46kvmd-network`
+
+Access: `S50dropbear` `S80ttyd` `S81ubus` `S79mdnsd` `S80mDNSResponder`
+
+Also: `S59snmpd`, `S22overlayfs`, `S10atomic_commit.sh`, `S99_bootcontrol`,
+`S99_auto_reboot`, `S24glhwinfo`, `S23hdmi`.
+
+`S59snmpd` — an SNMP daemon nobody mentions — is worth a look on its own.
+
+---
+
+## Firmware images held locally
+
+| Version | File | Size | sha256 |
+| --- | --- | --- | --- |
+| 1.10.0 | `glkvm-RM1-1.10.0-0710-1783648193.img` | 181 MB | `8a46739a…ba49` **verified** |
+| 1.7.0 | `glkvm-RM1-1.7.0-1107-1762486370.img` | 262 MB | `6857bfc8…f9d3` **verified** |
+| 1.3.0 | `glkvm-RM1-1.3.0-release-update.img` | 222 MB | `32df0ec4…0d84` (no vendor hash published) |
+
+The two beta hashes were checked against the vendor's own
+`testing/list-sha256.txt` at download time; `sha256sum -c` passes. The trailing
+number in each filename is an epoch: 1.10.0 = 2026-07-10, 1.7.0 = 2025-11-07.
+
+The OTA channel is queryable without a device:
+
+```
+.../kvm/rm1/release/version          plain-text version stanza
+.../kvm/rm1/release/update.img       the release image
+.../kvm/rm1/testing/list-sha256.txt  beta index, with sha256 + size
+```
+
+`release/version` returns `RK_MODEL=RM1 / RK_VERSION=V1.3.0 release1 /
+RK_OTA_HOST=172.16.21.205:8080` — that last being GL.iNet's internal build
+server leaked into a public file. The release channel is stale (`update.img`
+last modified 2025-07-02); only two betas are listed at a time.
+
+### Version diff, 1.7.0 → 1.10.0
 
 | | 1.3.0 | 1.7.0 | 1.10.0 |
 | --- | --- | --- | --- |
 | files | 10,256 | 10,785 | 12,385 |
 | uncompressed | 512 MB | 608 MB | 420 MB |
-| image | 222 MB | 262 MB | 181 MB |
 
-More files, much smaller image. The 72 MB image drop is **binary stripping**,
-not feature removal — net −262 MB across files present in both:
+More files, smaller image: the 72 MB drop is **binary stripping**, not feature
+removal — net −262 MB across files present in both (`libpython3.12.so` −20.8 MB,
+`librkaiq.so` −15.7 MB, `libc` −15.4 MB, plus `perf`, `trace` and valgrind
+removed entirely). 1.7.0 shipped unstripped libraries and full debug tooling.
+
+Practical consequence: **older firmware is the friendlier reversing target** if
+symbols ever matter.
+
+---
+
+## Open questions
+
+**Which build is on which unit — unresolved.** The units serve bundles that
+appear in none of the three vendor images [measured]:
+
+| Image | glweb bundles |
+| --- | --- |
+| 1.3.0 | `index-B8Luf3Jz.js` `index-BSr0T-4M.js` `index-CZ82wUA8.js` |
+| 1.7.0 | `index-BitRlry9.js` `index-COsSr8yH.js` `index-OsZ6zXfv.js` |
+| 1.10.0 | `index-DoTFM32C.js` `index-eqq7oJ5H.js` `index-ufafOX6U.js` |
+| **observed** | `index-SI23g4RB.js` (`.13`/`.14`), `index-CddyYr6q.js` (`.15`) |
+
+So all three units run firmware GL.iNet no longer distributes. Two consequences:
+
+- The held images are recovery **targets**, not byte-exact restore points —
+  flashing one moves a unit to a different version. `dd` each unit's own rootfs
+  before modifying it if exact rollback matters.
+- Everything marked [untested] was verified against 1.10.0, not against what the
+  units actually run. Their configs may differ.
+
+Settling it needs one shell: `cat /etc/os-release`, or the UI's About page.
+
+**Does an OTA discard live changes?** `S22overlayfs` gives `/etc` a writable
+overlay, so edits survive reboots. But `S10atomic_commit.sh` and
+`S99_bootcontrol` point at atomic/A-B update handling. Assume an OTA wipes
+config changes and plan to re-apply — that, not any difficulty in making the
+changes, is the real argument for the image route.
+
+---
+
+## Alternative hardware, if the goal is "not GL.iNet"
+
+From published reviews, not tested here: JetKVM (~$103, Go, fully open),
+PiKVM V4 Mini (~$270, GPLv3, IPMI/Redfish), Sipeed NanoKVM (~$70 — read its
+security history first), BliKVM v4.
+
+Not viable on this hardware: upstream PiKVM assumes a Raspberry Pi, and
+[One-KVM](https://github.com/mofeng-git/One-KVM) supports OneCloud, OEC/OECT,
+Phicomm N1 and VMs — no RV-class Rockchip, no RM1. Porting either means
+rewriting the video/HID glue GL.iNet already published under GPLv3.
+
+---
+
+## Security observations
+
+- `/api/redfish/v1` is served **unauthenticated** on all three units [measured].
+  Service root only — `/redfish/v1/Systems` requires auth — so the exposure is
+  version-fingerprinting, not control. Worth closing if these ever face a less
+  trusted network.
+- 2FA is **off** on all three [measured].
+- The firmware ships `/etc/kvmd/vnc/ssl/server.key`. A TLS private key baked
+  into a public firmware image is identical on every unit unless regenerated at
+  first boot — worth checking on a real device before relying on VNC's VeNCrypt.
+  That file, with the shipped `vncpasswd` / `ipmipasswd` / `htpasswd` templates,
+  is under `extracted/` and therefore in this repo's git history. It is public
+  vendor content, not a local secret, and this repo has no remote — but strip
+  those paths before pushing anywhere.
+
+---
+
+## Corrections to earlier drafts of this file
+
+Recorded because both were stated as fact here before being disproved, and
+because the first changed the recommended route entirely.
+
+1. **"GL.iNet replaced the contents of `/usr/share/kvmd/web` with their Vue
+   build."** False. Both front ends ship in separate directories; the classic
+   paths 404 only because that nginx context is not included. This is what
+   turned "build the pug templates and deploy them" into "remove a comment."
+2. **"VNC may show no video without memsink values from the unpublished
+   main.yaml."** False. `main.yaml` already wires all three sinks, and the HTTP
+   JPEG client is appended unconditionally regardless.
+3. **"HDMI bridge: LT6911C or GSV1127X depending on board rev."** Imprecise.
+   `upgrade.py:876-881` selects GSV1127X for `rm10rc`/`rm4pe` and GSV1127 for
+   `rmq1`, defaulting to LT6911C — and `rm1` is not in the map, so the RM1 takes
+   LT6911C.
+4. **A bug in `tools/enable_classic_ui.sh`**, caught by testing before release:
+   the transform keyed on `/^#\s*\}\s*$/` and terminated on the inner
+   `location /connect {` brace, leaving the server block unclosed. Now tracks
+   brace balance.
+
+---
+
+## Repository layout
 
 ```
--20.8 MB  /usr/lib/libpython3.12.so.1.0
--15.7 MB  /usr/lib/librkaiq.so
--15.4 MB  /lib/libc-2.28.so
--11.5 MB  /usr/sbin/cloudflared
--11.2 MB  /usr/bin/perf
--11.2 MB  /usr/bin/trace
--10.5 MB  /usr/lib/libstdc++.so.6.0.25
- -7.4 MB  /usr/lib/valgrind/memcheck-arm-linux
+firmware/    3 images (gitignored) + SHA256SUMS + fetch.sh + partitions-1.10.0.json
+extracted/   3 rootfs squashfs (gitignored) + 110 config files from 1.10.0
+vendor/      glkvm @3e8dd23 (1.10.0), pikvm-kvmd @387846d (v4.213) — gitignored
+tools/       enable_classic_ui.sh, S99kvmd-{vnc,ipmi}, override.yaml.example,
+             apply_to_glkvm_safe.sh, rkfw_scan.py, webterm-snippets.md
 ```
-
-1.7.0 shipped unstripped libraries plus `perf`, `trace` and valgrind. 1.10.0
-strips them — a hardening/cleanup pass, and a reminder that **older firmware is
-the friendlier reversing target** if symbols ever matter.
-
-Also removed in 1.10.0: the `FactoryTest-*` binaries (audioplay, ircut, key,
-lan, mic, sdcard), `/etc/ssh/ssh_host_dsa_key{,.pub}`, `S50fcgiwrap`, `S51n4`.
-Added: 1,518 files under `/usr/lib/python3.12`, and 3 new `/etc/kvmd/nginx`
-configs — consistent with `gl.ctx-server.conf` arriving in this window.
-
-### Independent confirmation of the signing timeline
-
-```
-1.3.0   /etc/firmware/key  ABSENT
-1.7.0   /etc/firmware/key  ABSENT
-1.10.0  /etc/firmware/key/public.raw
-```
-
-The Ed25519 public key that `fwtools verify` checks against appears in exactly
-the release where the `ED25` header marker appears. Two independent signals,
-same conclusion: **signing arrived in 1.10.0**, and `?skip_verify=true` arrived
-with it.
