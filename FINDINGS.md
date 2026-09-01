@@ -1186,6 +1186,61 @@ Verified end to end on `.15` [measured]:
 So the claim in the script header — *survives reboot* — now covers the patched
 modules too, not just the UI and VNC.
 
+## The baked image — provisioning inside the firmware, accepted by the device
+
+[measured] 2026-09-01. `tools/bake-image.sh 192.0.2.160` produces
+`firmware/glkvm-RM10-1.10.0-provisioned.img` (304,581,258 bytes,
+sha256 `c3fa2985…1edd3`). **Built and verified, not flashed.**
+
+| gate | result |
+| --- | --- |
+| squashfs base is the RM10 image's rootfs, byte for byte | ✓ (223,961,088 B, gzip) |
+| `/etc/rm10-gui` + `gl_kvm_gui` present in the tree | ✓ — RM10 confirmed from inside |
+| all 7 provisioning steps assert their effect | ✓ |
+| new rootfs: 223,965,184 B, gzip, 128 KiB blocks, superblock readable | ✓ |
+| 7 partitions before rootfs byte-identical to vendor | ✓ |
+| signature replaced; trailing MD5 covers `file[:-32]` | ✓ |
+| **on `.15`: `check_image_validity`** | **`Valid`, exit 0** |
+| **on `.15`: `fwtools verify` with our key** | **`Signature: OK`** |
+| on `.15`: `fwtools verify` with GL.iNet's key | `FAIL` — correct, it is our signature |
+
+What is inside, applied to the vendor 1.10.0 rootfs: our signing public key
+(vendor's kept as `public.raw.glinet`), the classic UI on :8888, `override.yaml`
+(**auth disabled** — see its banner), VNC autostart via `/etc/kvmd/user/scripts`,
+the patched `api/export.pyc`, our SSH key in `/root/.ssh/authorized_keys`,
+`/etc/glkvm-bake.txt` naming the git revision, and every `.orig` that
+`deprovision.sh` and `apply-module.sh --revert` expect — so a unit flashed from
+this image can still be walked back to vendor state with the same tools.
+
+Only `export.py` of the three patches is baked. Disassembling the **real**
+1.10.0 `info/__init__.pyc` shows it already registers `health` with
+`HealthInfoSubmanager(self, state_poll)`; the other two patches exist to do
+that on 1.8.1. The `fan` request in `export.py` is present on both, so
+Prometheus is broken on stock 1.10.0 too.
+
+### The trap this build walked into, and the gate that now stops it
+
+`extracted/rootfs-1.10.0.squashfs` was the **RM1** rootfs — byte-identical to
+the RM1 1.10.0 image's partition, zstd, no LCD assets. The first bake went all
+the way to `mksquashfs` on it. Every check passed, because the RM1 and RM10
+rootfs are the same kvmd, the same nginx block, the same key path; only the
+LCD assets (`/etc/rm10-gui`) and `gl_kvm_gui` differ. Nothing had asked *which
+hardware* the base was for.
+
+Two independent gates now do. The orchestrator hashes the squashfs against the
+rootfs partition of the hash-verified RM10 image; the VM side refuses a tree
+without `/etc/rm10-gui`. The file is renamed `rootfs-RM1-1.10.0.squashfs`, and
+the RM10 one is `rootfs-RM10-1.10.0.squashfs`, extracted straight from the
+image by `rk_pack.parse` rather than trusted from a directory listing.
+
+### Flashing, when that decision is made
+
+It wipes the overlay — including the SSH key on the *current* system — and
+the first flash of a stock unit needs `POST /api/upgrade/start?skip_verify=true`
+because the installed key is GL.iNet's. After that our key is in place. The
+image carries its own `authorized_keys`, so SSH comes back without the
+browser-console bootstrap.
+
 ## The 10 routes — status on `.15`
 
 | # | Route | Status | Note |
@@ -1214,8 +1269,22 @@ verified against the vendor list). RM10 has **no release channel** — testing
 only, one version listed. The device runs **1.8.1**, so this image is an
 upgrade, not a like-for-like restore.
 
-RM10 partition layout differs from RM1: rootfs 224 MB @ flash `0x38000`,
-`oem` @ `0x238000`, boot 22.7 MB, recovery 26.2 MB.
+RM10 partition layout differs from RM1. From the image's own `parameter`
+block (`mtdparts=rk29xxnand:…`), sectors × 512 [measured]:
+
+| partition | flash offset | size | vendor payload |
+| --- | --- | --- | --- |
+| boot | `0x8000` | 32 MiB | 8.3 MiB |
+| recovery | `0x18000` | 32 MiB | 16.3 MiB |
+| **rootfs** | `0x38000` | **1 GiB** | **213.6 MiB** squashfs (223,961,088 B) |
+| oem | `0x238000` | 192 MiB | 6 MiB |
+| userdata | `0x298000` | 1 GiB | — |
+| media | `0x498800` | 27,467 MiB | — (the MSD partition) |
+
+An earlier draft of this file said "rootfs 224 MB" — that was the vendor
+squashfs *file* size (223,961,088 B ≈ 224 MB decimal) misread as the partition
+limit. There is ~810 MiB of headroom in the rootfs partition, which matters for
+baking anything substantial into an image.
 
 ## LIVE TEST — 2026-09-01, on `.15` (GL-RM10, fw 1.8.1)
 
@@ -1588,11 +1657,18 @@ because the first changed the recommended route entirely.
 firmware/    3 images (gitignored) + SHA256SUMS + fetch.sh + partitions-1.10.0.json
 extracted/   3 rootfs squashfs (gitignored) + 110 config files from 1.10.0
 vendor/      glkvm @3e8dd23 (1.10.0), pikvm-kvmd @387846d (v4.213) — gitignored
-tools/       provision.sh, deprovision.sh, msd.sh, checkpoint.sh,
-             restore-checkpoint.sh, rk_pack.py, rk_sign.py, rkfw_scan.py,
+tools/       provision.sh, deprovision.sh, drift.sh, checkpoint.sh,
+             restore-checkpoint.sh, apply-module.sh, msd.sh, panel.sh,
+             panel.py, bake-image.sh, bake-image.remote.sh,
+             uncomment-8888.awk, rk_pack.py, rk_sign.py, rkfw_scan.py,
              enable_classic_ui.sh, S99kvmd-{vnc,ipmi}, override.yaml.example,
-             apply-vaulted-credential.ps1, apply_to_glkvm_safe.sh,
-             webterm-snippets.md
+             selftest.sh, verify-gates.sh, apply-vaulted-credential.ps1,
+             apply_to_glkvm_safe.sh, webterm-snippets.md
+patches/     modified kvmd modules, mirroring site-packages
+extracted/   rootfs-RM10-1.10.0.squashfs (the bake base, from the RM10 image),
+             rootfs-RM1-{1.3.0,1.7.0,1.10.0}.squashfs (RM1 — wrong product,
+             kept for reference), rootfs-1.10.0/ config files (gitignored)
+firmware/    vendor images + glkvm-RM10-1.10.0-provisioned.img (gitignored)
 checkpoints/ restorable snapshots (gitignored)
 wheels/      cross-built aarch64 wheels (gitignored)
 ```

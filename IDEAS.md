@@ -207,17 +207,26 @@ Now that Prometheus works, three units on one board is a short job.
 
 ## Bigger, but the groundwork is done
 
-### Close the source/firmware gap
-The single highest-leverage move. The device runs 1.8.1; the source we hold is
-1.10.0; every module's bytecode differs, so every port needs a provenance
-check first. Running a firmware whose source we hold exactly would make all of
-the above ordinary edits. We can already build, modify and sign images that the
-device's own `check_image_validity` accepts.
+### Close the source/firmware gap — one flash away
+The device runs 1.8.1; the source we hold is 1.10.0; every module's bytecode
+differs, so every port needs a provenance check first. The provisioned 1.10.0
+image above is built and device-accepted; flashing it moves `.15` onto a base
+whose source we hold, and brings `recorder`, `serial`, `custom_screen` and
+`netbird` with it (all present in the 1.10.0 rootfs, measured). Even then the
+1.10.0 bytecode is not byte-identical to the published source — `health.pyc`
+is 7245 B on the image vs 7190 B compiled from source — so the provenance check
+stays.
 
-### Bake provisioning into firmware
-A custom image shipping the classic UI, VNC, our SSH key and config **already
-enabled** — so a factory reset or OTA lands in the desired state instead of
-stock. The only route that survives an OTA.
+### ✅ Bake provisioning into firmware — built, verified, not flashed
+`tools/bake-image.sh` produces `firmware/glkvm-RM10-1.10.0-provisioned.img`:
+the vendor 1.10.0 rootfs with the classic UI, `override.yaml`, VNC autostart,
+the `export.py` patch, our SSH key and our signing key inside, plus the `.orig`
+files the revert tools expect. `.15`'s own `check_image_validity` says `Valid`
+and `fwtools verify` accepts our signature. **Flashing is a separate decision**
+— it wipes the overlay and the first flash needs `?skip_verify=true`.
+
+The build walked into the RM1-rootfs trap once (see FINDINGS); two independent
+product-identity gates now stop it.
 
 ### Rewrite the vendor glue
 Surveyed in FINDINGS. 13 of the 36 GL.iNet-only files are pure Python; the KVM
