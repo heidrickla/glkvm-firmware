@@ -413,7 +413,16 @@ Two defects were caught this way, both of which would have failed on hardware:
    typo. Uncommented verbatim it binds a second server to `:443` beside the
    real one. Now rewritten to 8888 and reported.
 
-The one thing that cannot be checked off-device: the units run **busybox awk**,
+**Full startup validation could NOT be completed off-device.** `_init_config`
+imports and runs, but kvmd's validators assert that absolute Linux paths exist
+(`/usr/share/kvmd/extras`, `/etc/kvmd/meta.yaml`, keymaps…), which on Windows
+resolve to `D:\...`. Staging a fake tree got past `meta.yaml` and then stalled;
+the attempt is not worth repeating. **So "the override merges correctly" is
+proven; "kvmd will start with it" is not.** That matters: a config that merges
+but fails validation stops kvmd, and with no SSH that means no web UI. Apply the
+override on `.15` only, and be ready to revert via the web terminal.
+
+The other thing that cannot be checked off-device: the units run **busybox awk**,
 and the only ARM busybox available is inside the extracted rootfs. Mitigated by
 design rather than by testing — `enable_classic_ui.sh` asserts `listen 8888`
 actually went live, then runs `nginx -t`, and restores its backup if either
