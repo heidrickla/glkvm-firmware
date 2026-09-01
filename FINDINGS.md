@@ -524,6 +524,70 @@ is the only source. It also means GL.iNet's own `apply_to_glkvm.sh` works by
 letting pushed `.py` files shadow the `.pyc`, since CPython prefers a source
 file when both are present.
 
+### ⚠ The boot-order trap: init scripts in `/etc/init.d` NEVER autostart
+
+The single most important operational finding, and it fails **silently**.
+
+`/etc/init.d/rcS` (run from `/etc/inittab` at `::sysinit`) is stock buildroot:
+
+```sh
+for i in /etc/init.d/S??* ;do ... $i start ... done
+```
+
+The glob is expanded **once, at loop start**. But the writable overlay is not
+mounted until `S08overlayfs`, which does a `pivot_root`. So at glob time the
+root filesystem is the **read-only squashfs**, and any script you added lives
+only in the overlay — invisible.
+
+Proof on the device:
+
+```
+/rom/etc/init.d/S99kvmd-vnc : ABSENT   (overlay-only — never globbed)
+/rom/etc/init.d/S98kvmd     : present  (base image — globbed, starts fine)
+```
+
+The symptom is confusing: a boot marker showed **`ENTER argv=stop` and nothing
+else**. `rcK` runs at *shutdown*, with the overlay mounted, so it happily stops
+a service that was never started. Files persist across reboot; the service just
+never comes up.
+
+### The supported extension point: `/etc/kvmd/user/scripts/`
+
+`S99custom` **is** in the base image, so `rcS` sees it — and it iterates
+`/etc/kvmd/user/scripts/S??*` at *its own* runtime, long after the overlay is
+up:
+
+```sh
+start() { for i in /etc/kvmd/user/scripts/S??* ; do ... $i start ... done }
+```
+
+So the correct install path for anything of ours is
+**`/etc/kvmd/user/scripts/`**, not `/etc/init.d/`. Verified by reboot: VNC came
+back on its own, `Listening VNC on TCP [::]:5900` in the boot log.
+
+### Reboot persistence — verified
+
+Three reboots. Everything survives (overlay is on `/userdata`, `mmcblk0p8`):
+
+| Item | Survives reboot | Autostarts |
+| --- | --- | --- |
+| `/root/.ssh/authorized_keys` | ✅ | n/a |
+| nginx 8888 block uncommented | ✅ | ✅ (nginx reads config at boot) |
+| `/etc/kvmd/override.yaml` | ✅ | n/a |
+| VNC via `/etc/kvmd/user/scripts/` | ✅ | ✅ |
+| VNC via `/etc/init.d/` | ✅ (file) | ❌ **never** |
+
+Note this proves persistence across **reboot**, not across an **OTA**. Assume an
+update discards it and re-run `tools/provision.sh`.
+
+### Correction: the `/etc/init.d/` inventory above is the RM1 image, not these units
+
+`S22overlayfs`, `S10atomic_commit.sh` and `S99_bootcontrol` do **not exist** on
+the RM10. The real list includes `S05async-commit.sh`, `S08overlayfs`,
+`S09re-mountall.sh`, `S52lt86102_setup`, `S99custom`, `S99gl_kvm_monitor`,
+`S99repeater`, `S99rkipc`, `S99test_cold_boot`, `S99test_mqtt`,
+`S99test_plugin`. Treat the earlier list as RM1-only.
+
 ### Deviations from the RM1-derived expectations
 
 | Expectation (from RM1 images) | Reality on RM10 |
