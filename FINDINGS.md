@@ -511,6 +511,64 @@ Copy anything you want to keep off the VM before powering it down.
 Provisioned with PowerCLI under `ob.ps1 esxi` (OpenBao injects vCenter creds as
 env vars — never printed, never on argv).
 
+## Route 10 COMPLETE — we can build, modify AND sign firmware
+
+Verified end to end on `.15` with the device's own tools:
+
+```
+check_image_validity signed.img   ->  Valid, exit=0     (non-skippable gate)
+fwtools verify signed.img OURKEY  ->  Signature: OK
+fwtools verify signed.img GLKEY   ->  Signature: FAIL
+fwtools info                      ->  MD5 check: OK
+```
+
+### The signing scheme
+
+`fwtools` exposes `sign` / `verify` / `pack` / `extract` / `info`, and takes
+**raw 32-byte** Ed25519 keys. The signature covers **`file[:-96]`** — header +
+loader + RKAF + CRC, i.e. everything before the signature itself. Determined by
+verifying GL.iNet's own signature against candidate ranges using their public
+key (`f7e69e17…`), not by guessing.
+
+`tools/rk_sign.py` signs an image and recomputes the trailing MD5 (which covers
+`file[:-32]` and therefore *includes* the signature — sign first, then MD5).
+
+### Stripping the vendor trust anchor
+
+`/etc/firmware/key/public.raw` is a plain 32-byte file in the rootfs. Our build
+replaces it with our own public key and keeps GL.iNet's alongside as
+`public.raw.glinet`, so the change is reversible from inside the image.
+
+**The bootstrap chain:** the first flash still needs `?skip_verify=true`, because
+the *currently installed* key is GL.iNet's. After that our key is in place and
+every subsequent image we sign verifies natively — no bypass flag, and no
+dependence on GL.iNet leaving `skip_verify` in place.
+
+Keys live on the build VM only (`glkvm-signing.priv` / `.pub`, non-persistent
+disk). **The private key is not in this repo and is lost on VM power-off** — if
+that matters, vault it before powering down.
+
+## Route 8 COMPLETE — self-hosted relay
+
+`glkvm-relay` (`vm-1264`), **192.0.2.140**, built from `Ubuntu-2404-template`
+exactly like the dev box (NoCloud `CIDATA` seed, PowerCLI under `ob.ps1 esxi`).
+
+| | |
+| --- | --- |
+| Stack | `gl-inet/glkvm-cloud` @`be821d4`, Docker Compose |
+| Containers | `glkvm_cloud`, `glkvm_coturn` — both running |
+| Ports | 443 web UI, 10443 ws proxy, 5912 device, 3478 TURN (TCP+UDP) |
+| Secrets | generated into `~/glkvm-cloud/docker-compose/.env` (0600), **not** in this repo |
+| Disk | **Persistent** — deliberately unlike the dev box; a relay holds state |
+| CD | detached, seed deleted from the datastore |
+
+⚠ The shipped compose defaults are placeholder secrets
+(`DeviceTokenYouCanChangeMe`, `StrongP@ssw0rd`, `AnotherS3cret`). They were
+replaced with generated values. Read them on the VM to log in, and vault them.
+
+Correction to an earlier note: glkvm-cloud supports **arm64 as well as x86_64** —
+"x86_64 only" came from a stale search result, not the repo.
+
 ## The 10 routes — status on `.15`
 
 | # | Route | Status | Note |
