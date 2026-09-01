@@ -1241,6 +1241,49 @@ because the installed key is GL.iNet's. After that our key is in place. The
 image carries its own `authorized_keys`, so SSH comes back without the
 browser-console bootstrap.
 
+## CI — on the forgehost Gitea runner, built to fail loudly
+
+GitHub Actions is halted on a spend cap; `.github/workflows/ci.yml` is parked
+on `workflow_dispatch`. `.gitea/workflows/validate.yml` on the self-hosted
+runner is the pipeline that gates the repo. [measured] 2026-09-01: run #16
+green on push; `verify-gates` (dispatch-only) run #17 green on the runner.
+
+| job | when | what |
+| --- | --- | --- |
+| `Tooling selftest` | every push | `tools/selftest.sh --ci` — shell syntax, shellcheck (pinned, via `shellcheck-py`), Python compile, `override.yaml.example` validation, the firmware packer selftest, regression checks for the three silent bugs, exec bits in git |
+| `Prove the gates can fail` | `workflow_dispatch` | `tools/verify-gates.sh` — breaks each thing selftest checks and asserts it goes red, with an unmodified copy as positive control |
+
+Design rules, each earned:
+
+- **`--ci` turns a skipped check into a failure.** A check that could not run
+  has verified nothing, and a runner can install whatever it needs. Only two
+  skips survive: gitignored build artifacts, and the absence of a real KVM.
+- **Every enumeration has a floor.** `for f in tools/*.sh` after a rename
+  iterates zero times and every assertion inside passes.
+- **Nothing suppresses a child's output**, and every `run` uses
+  `set -euo pipefail` under an explicitly declared `bash` — the runner's
+  default shell rejects `pipefail`, and every other workflow in the estate
+  avoids it rather than declaring a shell.
+- **One fast job on push.** The runner is shared with capacity 1.
+- **`actions/checkout@v3`**, not v4 — v4 is not supported by this runner.
+
+### The failure that took six runs to see
+
+Every `tools/*.sh` was committed as mode `100644`. The repo is authored on
+Windows, where `core.fileMode` is false and `chmod +x` never reaches git's
+index, so on the Linux runner the first command of every job —
+`./tools/selftest.sh` — was `Permission denied`. The step died before printing
+anything, which looked exactly like a broken runner. It was the repo.
+
+This Gitea (1.24.7) exposes no job logs to the API — `/actions/runs` 404s,
+`/actions/jobs/{id}/logs` 404s, the artifacts list returns nothing, and the web
+route wants a CSRF token — so the only signal a run sends back is per-job
+status. The diagnosis came from **encoding one question per job** (does pip
+exist, can it install the pins, is shellcheck on PATH, does selftest pass, are
+the files executable) and reading which squares went red. `selftest.sh` now
+asserts the exec bit is set in git for every script, and that gate was watched
+firing in a scratch clone before it was committed.
+
 ## The 10 routes — status on `.15`
 
 | # | Route | Status | Note |
