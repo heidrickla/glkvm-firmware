@@ -25,3 +25,6 @@ venv/
 
 # Throwaway keypair for the squashfs build VM
 .ssh-buildvm/
+
+# Firmware signing keypair. PRIVATE KEY - never commit.
+.signing-key/

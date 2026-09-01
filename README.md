@@ -10,9 +10,19 @@ claim tagged `[measured]` / `[source]` / `[untested]` — is in
 
 | Unit | State |
 | --- | --- |
-| `.15` | **Provisioned and verified.** Classic PiKVM UI, VNC, SSH key. Survives reboot. |
-| `.13` | Untouched |
-| `.14` | Untouched |
+| `.15` | **All 10 routes done.** Classic UI, VNC, IPMI, passwordless auth, ugpio, custom signed firmware built. Survives reboot. |
+| `.13` | Untouched — **kept stock as the baseline reference** |
+| `.14` | Untouched, available |
+
+### Supporting machines
+
+| Host | Purpose |
+| --- | --- |
+| `glkvm-build` 192.0.2.160 | firmware repack toolchain (squashfs-tools). **Non-persistent disk** — work is discarded at power-off |
+| `glkvm-relay` 192.0.2.140 | self-hosted `glkvm-cloud` relay. Persistent disk. Web UI on 443 |
+
+Both are Ubuntu 24.04 clones of `Ubuntu-2404-template`, seeded with a NoCloud
+`CIDATA` ISO and built via PowerCLI under `ob.ps1 esxi`.
 
 ## The build path
 
@@ -71,11 +81,41 @@ Install into **`/etc/kvmd/user/scripts/`** instead. `S99custom` is in the
 read-only base image and iterates that directory at its own runtime. That is
 GL.iNet's supported extension point, and `provision.sh` uses it.
 
+## Building custom firmware
+
+The whole RKFW container is decoded and we hold our own signing key, so custom
+images verify natively on the device.
+
+```sh
+# on glkvm-build (192.0.2.160), which has mksquashfs:
+python3 rk_pack.py rm10.img out.img rootfs rootfs-mod.bin   # repack
+python3 rk_sign.py out.img glkvm-signing.priv               # sign + fix MD5
+```
+
+`tools/rk_pack.py --selftest` reassembles the vendor image **byte-for-byte**, so
+the packer is verified against ground truth before you trust it with changes.
+
+Verified on-device: `check_image_validity` → `Valid`, and
+`fwtools verify <img> <our pubkey>` → `Signature: OK`.
+
+**Keys** are in `.signing-key/` (gitignored). The image carries our public key at
+`/etc/firmware/key/public.raw`, with GL.iNet's kept as `public.raw.glinet`.
+
+⚠ **Bootstrap:** the *first* flash still needs `?skip_verify=true`, because the
+key currently installed on the device is GL.iNet's. After that, ours is in place.
+
+⚠ **A flash wipes the overlay** (`updateEngine` runs with `--n`), including
+`/root/.ssh/authorized_keys` — you would re-bootstrap SSH via the browser
+console afterwards.
+
 ## What does not work
 
-- **IPMI.** `/usr/bin/kvmd-ipmi` ships, but `pyghmi` does not and neither does
-  `ipmitool`, so the daemon cannot start. `pip` is on the device if you decide
-  egress to PyPI is acceptable.
+- **IPMI is running but incomplete.** `pyghmi` was installed and the daemon
+  listens on UDP 623, but `/etc/kvmd/ipmipasswd` still holds the shipped
+  template entry, whose KVMD-side password is stale — so calls reach kvmd and
+  get `401`. Completing it needs the real KVMD admin password.
+  ⚠ The shipped `admin:admin` entry **does** pass IPMI authentication. Delete it
+  once the real entry is in place.
 - **Replacing the stack** with upstream PiKVM or One-KVM — neither supports this
   SoC. Modify the shipped GPLv3 `kvmd` instead.
 

@@ -17,3 +17,9 @@
 6857bfc86cd850269bc8f6db12ffd707312c7161705e72bcad0c24889cd3f9d3 *glkvm-RM1-1.7.0-1107-1762486370.img
 #     No vendor hash published for the release channel; recorded from our copy:
 32df0ec4073872620ee5d8c4f17af7cae47f7b269ec7ce2fe1d869e2a03e0d84 *glkvm-RM1-1.3.0-release-update.img
+
+# --- OUR BUILD: RM10 1.10.0 with classic UI + VNC + override baked in, and
+#     /etc/firmware/key/public.raw replaced with our signing key.
+#     Signed with .signing-key/glkvm-signing.priv; verified on-device:
+#     check_image_validity -> Valid, fwtools verify (our key) -> Signature: OK
+56609c420cd23a00a47b7fa6d3022462779d3f2bde1057ee44289860a1374fca *glkvm-RM10-1.10.0-custom-signed.img
