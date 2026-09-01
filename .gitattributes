@@ -7,6 +7,7 @@
 *.sh          text eol=lf
 S99kvmd-*     text eol=lf
 *.yaml        text eol=lf
+*.yml         text eol=lf
 *.example     text eol=lf
 *.awk         text eol=lf
 
