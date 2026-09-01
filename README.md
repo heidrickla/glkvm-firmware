@@ -60,6 +60,14 @@ unit). It enables:
 - **`/etc/kvmd/override.yaml`** — validated with `kvmd --dump-config` before it
   is kept; auto-restores the original if validation fails.
 - **VNC** on `:5900`, autostarting across reboots.
+- **Patched kvmd modules** — everything under `patches/`, then one kvmd restart
+  for the whole batch.
+
+⚠ Step 2 **aborts** if the device's `override.yaml` holds settings the repo copy
+does not, listing them, rather than silently overwriting. Provisioning is
+idempotent with respect to *the repo*, not the device — without that guard a
+"no-op" re-run destroys any on-unit setting the repo never learned about. Pass
+`--force` to overwrite anyway.
 
 ### 2. Undo
 
@@ -67,8 +75,8 @@ unit). It enables:
 ./tools/deprovision.sh 192.0.2.15
 ```
 
-Restores from the `.orig` backups the provisioning made. `--keep-key` leaves SSH
-access in place.
+Restores from the `.orig` backups the provisioning made, and reverts each
+patched module to its vendor `.pyc`. `--keep-key` leaves SSH access in place.
 
 ## The one trap worth knowing
 
@@ -122,15 +130,32 @@ console afterwards.
 ## Layout
 
 ```
-tools/       provision.sh, deprovision.sh, enable_classic_ui.sh,
-             S99kvmd-vnc, override.yaml.example, apply_to_glkvm_safe.sh,
-             rkfw_scan.py, webterm-snippets.md
+tools/
+  provision.sh / deprovision.sh    apply or undo the whole config, idempotent
+  msd.sh                           virtual media: upload / attach / detach an ISO
+  apply-module.sh                  install / revert a patched or ported kvmd module
+  panel.sh / panel.py              draw on the front LCD in GL.iNet's own style
+  checkpoint.sh / restore-...      snapshot + roll back site-packages and /etc/kvmd
+  rk_pack.py / rk_sign.py          rebuild and sign a firmware image
+  rkfw_scan.py                     inspect an RKFW container
+  enable_classic_ui.sh             uncomment the :8888 server block
+  S99kvmd-vnc / S99kvmd-ipmi       init scripts for the extra daemons
+  apply-vaulted-credential.ps1     push the OpenBao credential to a device
+  apply_to_glkvm_safe.sh           cherry-pick upstream kvmd changes
+  override.yaml.example            the config we apply
+patches/     modified kvmd modules, mirroring the site-packages tree; each
+             file carries a banner saying what it changes and why
 baseline/    pre-change state captured from .15
 backups/     kvmd trees pulled off devices
-firmware/    ⚠ RM1 images — WRONG PRODUCT for these units. Do not flash.
+checkpoints/ restorable snapshots (gitignored)
+wheels/      cross-built aarch64 wheels (gitignored)
+firmware/    RM1 + RM10 images, our signed build, SHA256SUMS, fetch.sh (gitignored)
+extracted/   unpacked rootfs squashfs + config files (gitignored)
 vendor/      gl-inet/glkvm and pikvm/kvmd source clones (gitignored)
-extracted/   unpacked RM1 rootfs + its config files
 ```
 
-`firmware/` and `extracted/` are RM1, from before shell access proved these are
-RM10s. They remain useful for reading GL.iNet's code, not for flashing.
+`firmware/` holds both products. The RM1 images are historical — from before
+shell access proved these units are **RM10**. The one to use is
+`glkvm-RM10-1.10.0-0715-1784101556.img`; `glkvm-RM10-1.10.0-custom-signed.img`
+is our own rebuild, signed with our key and accepted by the device's own
+`check_image_validity`.

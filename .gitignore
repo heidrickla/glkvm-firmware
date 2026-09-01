@@ -31,3 +31,6 @@ venv/
 
 # Device rollback checkpoints (large, reproducible)
 checkpoints/
+
+# generated panel renders/captures
+panel-*.png

@@ -109,7 +109,40 @@ ipmi:
 #         type: tesmart
 #         host: 10.0.0.50
 # ---------------------------------------------------------------------------
+# ###########################################################################
+# ##                                                                       ##
+# ##   AUTHENTICATION IS DISABLED BELOW. THIS IS DELIBERATE AND TEMPORARY. ##
+# ##                                                                       ##
+# ###########################################################################
+#
+# `kvmd.auth.enabled: false` means EVERYTHING on this unit answers with NO
+# credentials to anyone who can reach it on the network:
+#
+#   * the GL.iNet Vue UI on :443 and the classic PiKVM UI on :8888
+#   * the whole REST API — including MSD (mount an ISO and boot the attached
+#     machine from it) and HID (type into the attached machine)
+#   * Redfish power control — /redfish/v1/Systems/0 will power-cycle the
+#     attached host for anyone who asks
+#   * the Prometheus endpoint (kvmd.prometheus.auth.enabled defaults to true,
+#     so this global switch is the only thing exposing it)
+#
+# It is here because Lewis asked for passwordless access while the build
+# settles ("leave it open for now", "we will tighten security when we are
+# done"), and because provision.sh must reproduce the documented state of the
+# unit rather than quietly diverge from it. A KVM is a keyboard, a screen and
+# a boot device attached to something you care about; open means open.
+#
+# TO CLOSE IT: delete the two `auth:` lines below and re-run provision.sh. The
+# credential is already vaulted (OpenBao project `glkvm`,
+# KVMD-HT-USER / KVMD-HT-PASSWORD) and in sync on the device, so nothing else
+# has to change. Consider enabling TOTP at the same time — it is proven working
+# on this hardware and needs no packages installed. See the security section of
+# IDEAS.md for the rest of the hardening list.
+# ---------------------------------------------------------------------------
 kvmd:
+    auth:
+        enabled: false
+
     gpio:
         drivers:
             demo:

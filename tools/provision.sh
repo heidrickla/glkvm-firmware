@@ -4,8 +4,12 @@
 # Idempotent: safe to re-run. Every step verifies itself and reports.
 # Tested end-to-end on GL-RM10 (Comet Pro), fw rm10rc-1.8.1, kvmd 4.82.
 #
-#   Usage:  ./tools/provision.sh <device-ip>
+#   Usage:  ./tools/provision.sh <device-ip> [--force]
 #   Undo:   ./tools/deprovision.sh <device-ip>
+#
+#   --force overwrites override.yaml even when the device carries settings the
+#   repo copy lacks. Without it, that case aborts rather than silently
+#   regressing the unit — see step 2.
 #
 # PREREQUISITE — SSH key access. If `ssh -i .ssh-glkvm/id_ed25519 root@<ip>`
 # does not work, install the key first. There is no UI field for it on
@@ -23,6 +27,7 @@
 #   1. Classic PiKVM UI on :8888   (uncomments a server block GL.iNet ships disabled)
 #   2. /etc/kvmd/override.yaml     (enables the VNC server's settings)
 #   3. VNC autostart               (via GL.iNet's OWN user-scripts hook — see below)
+#   4. Patched kvmd modules        (everything under patches/, via apply-module.sh)
 #
 # WHY /etc/kvmd/user/scripts AND NOT /etc/init.d
 #   rcS expands `for i in /etc/init.d/S??*` ONCE, at loop start — which happens
@@ -35,12 +40,20 @@
 #   /etc/kvmd/user/scripts/S??* at its own runtime — long after the overlay is
 #   up. That is the supported extension point. Verified by reboot.
 #
-# NOT INCLUDED — IPMI. /usr/bin/kvmd-ipmi ships but `pyghmi` does not, so the
-# daemon cannot start (ModuleNotFoundError). `ipmitool` is absent too. pip is
-# available on-device if you decide egress to PyPI is acceptable.
+# NOT INCLUDED — IPMI. `pyghmi` was later installed and the daemon did run, but
+# the RAKP handshake proved unreliable, so IPMI is deliberately left off.
+# Redfish supersedes it: 6 power actions over HTTPS instead of 4 over UDP, and
+# it needs no extra daemon. See FINDINGS.md.
+#
+# NOT INCLUDED — the front panel (tools/panel.sh) and virtual media
+# (tools/msd.sh). Both are on-demand tools, not boot state: the panel is owned
+# by GL.iNet's gl_kvm_gui until you deliberately take it, and MSD holds no
+# image by default. Neither belongs in a provisioning run.
 
 set -eu
 IP="${1:-}"
+FORCE="no"
+[ "${2:-}" = "--force" ] && FORCE="yes"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KEY="$HERE/../.ssh-glkvm/id_ed25519"
 
@@ -68,7 +81,7 @@ ok "connected — model=$MODEL version=$VER"
 
 # ---------------------------------------------------------------- 1. classic UI
 echo
-echo "[1/3] classic PiKVM UI on :8888"
+echo "[1/4] classic PiKVM UI on :8888"
 if $SSH 'grep -qE "^[[:space:]]*listen[[:space:]]+8888" /etc/kvmd/nginx-kvmd.conf'; then
     ok "already enabled"
 else
@@ -79,7 +92,36 @@ fi
 
 # ---------------------------------------------------------------- 2. override
 echo
-echo "[2/3] /etc/kvmd/override.yaml"
+echo "[2/4] /etc/kvmd/override.yaml"
+
+# DO NOT CLOBBER SILENTLY. This step overwrites the live override.yaml with the
+# repo copy. If the device carries settings the repo copy lacks, that is a
+# REGRESSION, not a provision — and a silent one. Real example, 2026-09-01:
+# `.15` had `kvmd.auth.enabled: false` (deliberate, passwordless while the
+# build settles) which override.yaml.example does not carry, so a routine
+# re-run would have quietly switched authentication back on.
+#
+# So: diff the meaningful lines first and refuse unless --force is given.
+TMPD=$(mktemp -d 2>/dev/null || echo "/tmp/prov.$$")
+mkdir -p "$TMPD"
+trap 'rm -rf "$TMPD"' EXIT INT TERM
+
+if $SSH 'cat /etc/kvmd/override.yaml' > "$TMPD/device.yaml" 2>/dev/null; then
+    # Comments and blanks differ constantly and mean nothing; compare content.
+    strip() { sed 's/#.*$//' "$1" | sed 's/[[:space:]]*$//' | grep -v '^[[:space:]]*$' | sort -u; }
+    strip "$TMPD/device.yaml"          > "$TMPD/dev.txt"
+    strip "$HERE/override.yaml.example" > "$TMPD/repo.txt"
+    LOST=$(comm -23 "$TMPD/dev.txt" "$TMPD/repo.txt" 2>/dev/null || true)
+    if [ -n "$LOST" ] && [ "$FORCE" != "yes" ]; then
+        no "the device's override.yaml has settings this repo copy does NOT:"
+        printf '%s\n' "$LOST" | sed 's/^/        /'
+        die "refusing to overwrite and lose them.
+       Either fold these into tools/override.yaml.example, or re-run with:
+           $0 $IP --force"
+    fi
+    [ -n "$LOST" ] && no "--force given: overwriting anyway, losing the lines above"
+fi
+
 $SSH '[ -f /etc/kvmd/override.yaml.orig ] || cp /etc/kvmd/override.yaml /etc/kvmd/override.yaml.orig'
 $SCP "$HERE/override.yaml.example" "root@$IP:/etc/kvmd/override.yaml"
 if $SSH 'kvmd --dump-config >/dev/null 2>&1'; then
@@ -91,7 +133,7 @@ fi
 
 # ---------------------------------------------------------------- 3. VNC
 echo
-echo "[3/3] VNC server (autostart via /etc/kvmd/user/scripts)"
+echo "[3/4] VNC server (autostart via /etc/kvmd/user/scripts)"
 $SSH 'mkdir -p /etc/kvmd/user/scripts'
 $SCP "$HERE/S99kvmd-vnc" "root@$IP:/etc/kvmd/user/scripts/"
 $SSH 'chmod +x /etc/kvmd/user/scripts/S99kvmd-vnc
@@ -103,6 +145,61 @@ sleep 4
 $SSH 'netstat -ltn 2>/dev/null | grep -q ":5900"' \
     && ok "running and listening on 5900" \
     || no "5900 not listening — check: $SSH '/etc/kvmd/user/scripts/S99kvmd-vnc status'"
+
+# ---------------------------------------------------------------- 4. patches
+echo
+echo "[4/4] patched kvmd modules"
+# Everything under patches/ mirrors the site-packages tree. apply-module.sh
+# keeps the vendor .pyc as .pyc.orig the FIRST time only, so re-running this
+# whole script cannot lose the original or stack patches on patches.
+PATCHED=0
+FAILED=0
+if [ -d "$HERE/../patches" ]; then
+    # `find | while read` would run the loop in a subshell and lose the
+    # counters, so drive it from a here-doc-free for over a newline-safe list.
+    PATCH_LIST=$(find "$HERE/../patches" -name '*.py' 2>/dev/null | sort)
+    if [ -z "$PATCH_LIST" ]; then
+        ok "no patches to apply"
+    else
+        # NEVER discard apply-module.sh's output. Suppressing it is how the
+        # absolute-path bug stayed invisible: every module reported "applied"
+        # while writing a junk .pyc tree into site-packages and patching
+        # nothing. On failure the tool's own diagnosis is the only clue there
+        # is, so print it.
+        #
+        # Iterate with read, not `for p in $PATCH_LIST` under a changed IFS —
+        # that idiom breaks unquoted command expansion inside the loop body.
+        printf '%s\n' "$PATCH_LIST" > "$TMPD/patchlist"
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            rel=$(printf '%s' "$p" | sed 's|.*/patches/||')
+            # </dev/null is load-bearing: apply-module.sh runs ssh, ssh reads
+            # stdin by default, and stdin here IS the patch list. Without it
+            # the first module consumes the rest of the loop's input and the
+            # run reports success having applied exactly one of them.
+            if out=$("$HERE/apply-module.sh" "$IP" "$p" 2>&1 </dev/null); then
+                PATCHED=$((PATCHED + 1)); ok "applied $rel"
+            else
+                FAILED=$((FAILED + 1)); no "FAILED $rel"
+                printf '%s\n' "$out" | sed 's/^/          /' | head -12
+            fi
+        done < "$TMPD/patchlist"
+    fi
+else
+    ok "no patches/ directory"
+fi
+[ "$FAILED" -eq 0 ] || die "$FAILED module(s) failed to apply — device left running the vendor originals for those"
+
+if [ "$PATCHED" -gt 0 ]; then
+    # One restart covers the whole batch AND picks up the override.yaml from
+    # step 2, which otherwise would not take effect until a reboot.
+    echo "      restarting kvmd to load them ..."
+    $SSH '/etc/init.d/S98kvmd restart >/dev/null 2>&1 || true'
+    sleep 15
+    $SSH 'python3 -c "import kvmd" 2>/dev/null' \
+        && ok "kvmd imports cleanly after restart" \
+        || no "kvmd will not import — revert with: $HERE/apply-module.sh $IP <patch> --revert"
+fi
 
 $SSH sync
 

@@ -1,0 +1,120 @@
+name: CI
+
+# Fails loudly on purpose.
+#
+# The bugs that cost real time in this repo were never crashes — they were
+# silent successes: a script that suppressed a child's output and reported
+# "applied" while patching nothing, a loop that processed one item of three and
+# exited 0. So this pipeline is built so that "green" means "checked", not
+# "nothing threw":
+#
+#   * every `run` uses `set -euo pipefail`, so a failure mid-pipe cannot be
+#     masked by a later command's exit status
+#   * selftest runs with `--ci`, which turns a SKIPPED check into a FAILURE —
+#     a check that could not run has verified nothing, and a runner can install
+#     whatever it needs. Only two skips survive: gitignored build artifacts and
+#     the absence of real hardware
+#   * nothing uses `continue-on-error`. A red step fails the build
+#   * the tools shellcheck and pyyaml depend on are installed rather than
+#     allowed to skip
+
+# PARKED. GitHub Actions is halted on this account until the spend budget
+# resets, so the push/pull_request triggers are removed deliberately rather
+# than left to queue runs that cannot start. `.gitea/workflows/validate.yml`
+# on the self-hosted forgehost runner is the pipeline that actually gates the
+# repo in the meantime.
+#
+# TO RESTORE when GitHub is available again: put back
+#     push:
+#       branches: ["**"]
+#     pull_request:
+# alongside workflow_dispatch below.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: Tooling selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install check dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml
+          shellcheck --version
+          python3 -c "import yaml; print('pyyaml', yaml.__version__)"
+
+      - name: Selftest (skips count as failures)
+        run: |
+          set -euo pipefail
+          ./tools/selftest.sh --ci
+
+  shell-lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      # Separate from the selftest so a shellcheck regression is visible as its
+      # own red check rather than one line inside a longer log.
+      - name: Lint every shell script
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in tools/*.sh; do
+            echo "--- $f"
+            # SC2029 is intentional throughout: remote commands are built from
+            # local variables on purpose.
+            shellcheck -S warning -e SC2029 "$f" || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::shellcheck reported problems above"
+            exit 1
+          fi
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile every Python source
+        run: |
+          set -euo pipefail
+          python -m compileall -q tools patches
+          echo "all Python sources compile"
+
+      - name: Validate override.yaml.example
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          python - <<'PY'
+          import yaml
+          d = yaml.safe_load(open("tools/override.yaml.example", encoding="utf-8"))
+          assert isinstance(d, dict), "override.yaml.example is not a mapping"
+          for k in ("kvmd", "vnc"):
+              assert k in d, "missing top-level key: %s" % k
+          auth = (d.get("kvmd") or {}).get("auth", {})
+          # Must be stated explicitly. Leaving it implicit is how the security
+          # posture of every provisioned unit changes by accident.
+          assert "enabled" in auth, "kvmd.auth.enabled is not stated explicitly"
+          print("ok - kvmd.auth.enabled =", auth["enabled"])
+          PY

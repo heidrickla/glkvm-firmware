@@ -1,109 +1,244 @@
 # Feature ideas for the Comet KVMs
 
-A running list of things we *could* add, compiled as we go. Nothing here is
-done — see [FINDINGS.md](FINDINGS.md) for what actually is.
+A running list of things we *could* add, compiled as we go. Anything below the
+"Done" section is still just an idea — see [FINDINGS.md](FINDINGS.md) for the
+measured detail on what has actually been built.
 
-Each item notes what it costs and whether the pieces are already on the device,
-because a surprising amount of this ships disabled rather than absent.
+All work so far is on `.15`. `.13` and `.14` are untouched.
+
+---
+
+## Done
+
+### ✅ Mass Storage Device (virtual CD/USB) — `msd`
+**Working, with `tools/msd.sh` to drive it.** Needed no configuration —
+`main.yaml` already carried `msd: {type: otg}`. Upload an ISO and the attached
+machine sees a USB CD-ROM, so OS installs and rescue media no longer need
+somebody to walk a stick over.
+
+```
+tools/msd.sh 192.0.2.15 mount ubuntu.iso
+```
+
+27 GB of exfat on its own partition, outside the overlay. Two gotchas, both
+written up in [FINDINGS.md](FINDINGS.md): images under 614,400 bytes are
+rejected by the kernel with an opaque HTTP 500, and the storage list lags a few
+seconds behind disk. Booting a real installer on a real target is still
+unproven — everything so far is device-side.
+
+### ✅ Prometheus metrics — `api/export.py`
+**Had never worked on a stock unit** (HTTP 500, `KeyError: 'fan'`). Fixed by a
+patched module; `GET /api/export/prometheus/metrics` now returns 200 with ATX,
+GPIO and hardware series. Drops straight into an existing Prometheus/Grafana
+setup. Note it is unauthenticated *only* because auth is globally off.
+
+### ✅ Hardware telemetry — `info/health.py`
+CPU temperature, CPU load, memory and per-interface network rates. `health.pyc`
+shipped in the image but was **never registered**, so it was collected by
+nothing and invisible to both UIs. Now live in `/api/info?fields=health` and in
+the Prometheus output. Also removed a Raspberry-Pi `vcgencmd` probe that had
+been failing every 5 seconds forever.
+
+### ✅ Wake-on-LAN
+Works with no setup. `scan` (ARP sweep via `gl-arp-scan`) found 18 devices on
+the LAN; `add` / `list` / `wake` / `remove` all clean, with `wol_list.json`
+byte-identical before and after. `ether-wake` and `gl-arp-scan` both ship.
+Free power-on for anything on the LAN, no ATX wiring. Note `wake` is **POST**
+while `scan` and `list` are GET.
+
+### ✅ MSD writable-stick mode — a drop box off an airgapped machine
+`tools/msd.sh <ip> stick on|off`. Hands the whole 27 GB partition to the
+attached machine as a **writable** USB drive via the gadget's second LUN, so
+you can copy logs or a crash dump *off* a box with no network.
+
+GL.iNet got this right: `partition_connect` **unmounts** `/userdata/media` on
+the KVM first, so there are never two writers on one filesystem. The
+consequence is that stick mode and ISO mode are mutually exclusive — while the
+stick is attached, ISO storage is gone. `stick off` restores everything.
+
+### ✅ The front panel — drawing on it, in their visual language
+The RM10 has a **456×180 colour DSI LCD**, not the i2c OLED `kvmd-oled`
+expects — that tool cannot drive this hardware (`luma.core` isn't installed and
+an i2c scan finds no display). It is a framebuffer at `/dev/fb0`, so we can
+draw anything.
+
+`tools/panel.py` renders using **GL.iNet's own fonts and icons** from
+`/etc/rm10-gui` (18 MB, 6 fonts, 137 PNGs), laid out to measurements taken from
+a capture of their own home screen. `tools/panel.sh` drives it:
+
+```
+tools/panel.sh 192.0.2.15 preview kvmd   # PNG only - panel untouched
+tools/panel.sh 192.0.2.15 show kvmd      # take the panel
+tools/panel.sh 192.0.2.15 restore        # hand it back
+```
+
+Two screens: `home` reproduces theirs from live kvmd state; `kvmd` shows what
+theirs cannot — CPU temperature as the headline, with CPU, memory, MSD media
+state and ATX power in the cards. Verified by drawing to `/dev/fb0` and reading
+the framebuffer back.
+
+**Follow-ons:** a screen showing MSD image name while an ISO is mounted; an
+alert screen on high temperature; cycling screens on the built-in button; and
+`picture/` has 137 assets we have barely touched (wifi, net_info, keyboard,
+welcome) if a richer UI is wanted.
+
+### ✅ A repeatable way to change kvmd — `tools/apply-module.sh`
+`patches/` mirrors the site-packages tree; the tool compiles on-device, keeps
+the vendor `.pyc` as a one-time backup, and reverts cleanly. This is what makes
+everything below tractable rather than a pile of one-off hacks.
 
 ---
 
 ## Already on the device, just switched off
 
-These need configuration, not code. Highest value per hour.
+These need configuration, not code.
 
-### Mass Storage Device (virtual CD/USB) — `msd`
-`main.yaml` already sets `msd: {type: otg}`. Lets you mount an ISO over USB and
-boot the attached machine from it — OS installs and rescue media without
-physically walking a USB stick over. Arguably the single most useful KVM
-feature we are not using.
+### TOTP two-factor — proven, deliberately left OFF
+Not a "someday" item any more: the full enrolment cycle was tested and works —
+`create` → `init` → `show` (scannable `otpauth://`, issuer `GLKVM`) → `verify`
+(correct code ok, wrong code Forbidden) → `delete`. **`pyotp` 2.10.0 and
+`qrcode` 8.2 are already installed**, so nothing needs fetching. An earlier
+note here claimed pyotp was missing; that was a bad probe on
+`pyotp.__version__`, which the package does not define.
 
-### EDID spoofing — `kvmd-edidconf`
-`/etc/kvmd/edid.json` and `switch-edid.hex` ship, and `api/upgrade.py` knows how
-to flash the capture bridge's EDID. Lets you lie to the host about the attached
-monitor — force a resolution, stop a headless server dropping to 640×480, or
-make a machine believe a display is present at boot.
+Left **disabled** on purpose — turning it on belongs with re-enabling auth, in
+the security pass, not before it. See the enrolment handshake in FINDINGS: it
+403s unless you send back a code derived from the secret `create` gave you.
 
-### Session recording — `api/recorder.py`
-A recorder module is present. Capturing a session as evidence of what was done
-to a machine is genuinely useful for anything audited.
+### OCR and snapshots — blocked by a different video stack, not by tesseract
+`/api/streamer/ocr` and `/api/streamer/snapshot` both **503**, and the missing
+`libtesseract` is only the second problem. The first is architectural:
+`/api/streamer` reports `"streamer": null` because **GL.iNet replaced ustreamer
+with Janus/WebRTC** (`kvmd-janus`, `janusRestAPIServer.py`, `janus` with the
+ustreamer Janus plugin). kvmd's snapshot and OCR paths expect a ustreamer
+instance that simply is not running.
 
-### TOTP two-factor — `api/twofa.py`
-`/etc/kvmd/user/totp.secret` exists and `two_step_login` is in the resolved
-config. Worth having *before* re-enabling auth.
+Grabbing a frame straight from V4L2 is not a shortcut either: `/dev/video0`
+reports 0×0 with no format, and the rest of the 40 nodes are Rockchip CIF/ISP
+pipeline stages in Bayer formats. HDMI-in is configured by GL.iNet's own
+capture stack, so a frame grab means replicating their media-ctl/ISP setup —
+and getting that wrong risks the video path the KVM exists to provide.
 
-### Wake-on-LAN
-kvmd auto-injects a `__wol__` GPIO driver (`apps/__init__.py:249-257`) and
-`/etc/kvmd/user/wol_list.json` exists. Free power-on for anything on the LAN,
-no ATX wiring needed.
+`ustreamer`, `ffmpeg` and `v4l2-ctl` are all on the device, so this is doable;
+it is just a real piece of work rather than a switch to flip.
+
+### MSD partition formatting — `/api/msd/partition_format`
+The one partition verb not exercised. ⚠ It wipes the 27 GB media partition —
+only worth touching deliberately, e.g. to switch the filesystem the attached
+host sees from exfat to something else.
+
+### Type text into the target — `/api/hid/print`
+Paste a command, a licence key or a config blob into a machine with no network.
+Already routed, and the path is live: the USB device controller reports
+`state=configured, speed=high-speed` and the keyboard's LED state comes back
+from the host, so **something real is plugged into `.15` right now**.
+
+Deliberately **not** tested — it would type keystrokes into a machine we cannot
+see. Needs Lewis to say what is attached and that it is safe to type at it.
+
+### Fingerbot — `api/fingerbot.py`
+`/api/fingerbot/click|battery|upgrade|upload`. A physical button-pusher for
+machines with no ATX header at all. Only worth it if you own the hardware.
+
+### SNMP — `S59snmpd` — probably not worth it now
+NET-SNMP 5.9.3 and the `snmp` user both ship, but there is **no `snmpd.conf`
+anywhere** on the device, so the daemon starts and immediately warns *"no
+access control information configured… unlikely this agent can serve any
+useful purpose"*, and `S59snmpd start` silently achieves nothing. It also binds
+`127.0.0.1` only.
+
+Making it useful means authoring a config and picking a community string.
+Since the Prometheus endpoint now works and carries better data, this is only
+worth doing if something in the estate speaks SNMP and nothing else.
 
 ### The classic UI's own extras
-Now that it is live on `:8888`: macros, text paste into the target, keyboard
-shortcuts, and a health panel. All shipped, none surfaced by GL.iNet's UI.
+Live on `:8888`: macros, paste-to-target, keyboard shortcuts, health panel.
 
-### OLED front panel — `kvmd-oled`
-`/usr/bin/kvmd-oled` ships. If the RM10 has a panel, it can show IP, power
-state, and load.
+---
 
-### Fan control
-`/etc/kvmd/fan` exists. Worth a look if these ever sit somewhere warm.
+## Needs a port — source exists, module is not on this device
+
+The 1.10.0 source tree has these; firmware 1.8.1 does not ship them. Porting
+means a provenance check first — see the version-drift warning in FINDINGS.
+
+### Session recording — `api/recorder.py` (7 KB, subprocess)
+Capture a session as evidence of what was done to a machine. Useful for
+anything audited. *(Earlier drafts of this file claimed the module was already
+on the device. It is not — it exists only in the 1.10.0 source.)*
+
+### Serial console — `api/serial.py` (22 KB, **pure Python**)
+The device has `/dev/ttyS2`. Combined with a UART to the host this is a real
+out-of-band console — what IPMI's SOL was supposed to give us. It is the
+largest pure-Python module in the fork, so the port is mechanical.
+
+### Custom screen — `api/custom_screen.py` (14 KB, ubus)
+Display arbitrary content on the device. Entangled with ubus.
+
+### From upstream PiKVM 4.213 (we are on 4.82)
+`info/uptime.py`, `info/node.py`, `auth/onetime.py` (one-time login links),
+`ugpio/amt.py` (Intel AMT power control), `ugpio/noop.py`.
 
 ---
 
 ## Small builds on top of what we have
 
+### EDID spoofing
+`kvmd-edidconf` ships and `/etc/kvmd/switch-edid.hex` exists, but there is **no
+`/etc/kvmd/edid.json`** — an earlier draft of this file claimed otherwise and
+was wrong. EDID is managed through `/api/switch/edids/create|change|remove`,
+and `/api/switch` currently 404s (no switch hardware). Worth it to force a
+resolution, or make a headless server believe a display is attached.
+
 ### Power control from real hardware — `ugpio`
 ~20 drivers ship: `tesmart`, `extron`, `ezcoo`, `hue`, `anelpwr`, `wol`,
-`ipmi`, `cmd`, `cmdret`, `pway`, `xh_hk4401`, `tesmart`, `servo`, `pwm`. We
-proved the mechanism with a `cmd` driver. Wire a real smart plug or KVM switch
-and the buttons appear in both UIs.
-
-### Multi-port switch support — `api/switch.py`
-kvmd models a downstream KVM switch. Three units plus a switch could front many
-more machines than three.
+`ipmi`, `cmd`, `cmdret`, `pway`, `xh_hk4401`, `servo`, `pwm`. We proved the
+mechanism with a `cmd` driver. Wire a real smart plug or KVM switch and the
+buttons appear in both UIs.
 
 ### Redfish automation
-Now that Redfish works, it slots straight into Ansible
-(`community.general.redfish_command`), Zabbix, or a Home Assistant switch. A
-one-line HA integration gives you power control for the attached host next to
+Works today. Slots into Ansible (`community.general.redfish_command`), Zabbix,
+or a Home Assistant switch — power control for the attached host next to
 everything else in the house.
 
-### Serial console — `api/serial.py` + SOL
-A `serial` API module ships. Combined with a UART to the host, that is a real
-out-of-band console — the thing IPMI's SOL was supposed to give us.
-
-### SNMP — `S59snmpd`
-An SNMP daemon is running and nobody mentions it. Free monitoring integration
-if Zabbix already speaks SNMP in your estate.
+### Grafana dashboard
+Now that Prometheus works, three units on one board is a short job.
 
 ---
 
 ## Bigger, but the groundwork is done
 
+### Close the source/firmware gap
+The single highest-leverage move. The device runs 1.8.1; the source we hold is
+1.10.0; every module's bytecode differs, so every port needs a provenance
+check first. Running a firmware whose source we hold exactly would make all of
+the above ordinary edits. We can already build, modify and sign images that the
+device's own `check_image_validity` accepts.
+
 ### Bake provisioning into firmware
-We can build and sign images the device verifies. A custom image could ship the
-classic UI, VNC, our SSH key and config **already enabled** — so a factory reset
-or OTA lands in the desired state instead of stock. This is the only route that
-survives an OTA.
+A custom image shipping the classic UI, VNC, our SSH key and config **already
+enabled** — so a factory reset or OTA lands in the desired state instead of
+stock. The only route that survives an OTA.
 
-### Fleet provisioning
-`provision.sh` is idempotent and takes an IP. Trivially extends to a loop over
-an inventory, so new units join fully configured.
+### Rewrite the vendor glue
+Surveyed in FINDINGS. 13 of the 36 GL.iNet-only files are pure Python; the KVM
+function we actually depend on is `glatx.py` (6.5 KB), `streamer.py` (26 KB),
+and `hid/otg` + `msd/otg` (both largely upstream). The 116 KB `api/system.py`
+is network and device administration, not KVM.
 
-### Config drift detection
-We hold checkpoints and a `pip freeze`. A scheduled diff against a known-good
-checkpoint would catch an OTA quietly reverting our changes — which we know it
-will, since `updateEngine` runs with `--n` (format overlay).
+### Fleet provisioning and drift detection
+`provision.sh` now reproduces `.15` completely — classic UI, override.yaml, VNC
+and all three patched modules — and is verified idempotent and reboot-proof, so
+extending it to a loop over an inventory is the only work left for fleet
+rollout. It also refuses to overwrite an `override.yaml` carrying settings the
+repo lacks, which is what stops a "no-op" re-run from silently regressing a
+unit.
+
+Drift detection is still open: checkpoints plus a `pip freeze` give a
+known-good baseline to diff against, worth having since `updateEngine` runs
+with `--n` (format overlay) and will revert everything on OTA.
 
 ### Central relay
-`glkvm-relay` is up. Onboarding all three units gives one pane of glass, and it
-also accepts generic Linux hosts, not just Comets.
-
-### Upstream kvmd features we do not have
-We are on the 4.82 fork; upstream is 4.213. Post-fork additions include
-`nbd` (network block device MSD), `ugpio/amt.py` (Intel AMT), and
-`auth/onetime.py`. Cherry-picking is plausible via `apply_to_glkvm_safe.sh`,
-though GL.iNet's hardware glue would need care.
+`glkvm-relay` is up at 192.0.2.140. No devices onboarded yet.
 
 ---
 
@@ -112,9 +247,9 @@ though GL.iNet's hardware glue would need care.
 Listed here so it is not forgotten — Lewis: *"we will tighten security when we
 are done."*
 
-- **Re-enable auth.** `kvmd.auth.enabled: false` currently means the API,
-  both UIs, and Redfish power control need **no credentials** on the LAN. The
-  credential is vaulted and in sync, so this is a one-line revert.
+- **Re-enable auth.** `kvmd.auth.enabled: false` currently means the API, both
+  UIs, Redfish and now the Prometheus endpoint need **no credentials** on the
+  LAN. The credential is vaulted and in sync, so this is a one-line revert.
 - **Close unauthenticated Redfish.** Anyone on the LAN can power-cycle the
   attached machine today.
 - **Delete the default IPMI entry** (`admin:admin`) — it authenticates on a
