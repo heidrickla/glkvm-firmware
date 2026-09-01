@@ -9,24 +9,30 @@
     1. kvmd-htpasswd  (the actual login credential)
     2. the right-hand half of /etc/kvmd/ipmipasswd  (admin:admin -> user:pass)
 
-  If only the first is updated, IPMI still completes its RMCP handshake and then
-  silently 401s against kvmd — a failure that reads like an IPMI fault rather
+  If only one is updated, IPMI still completes its RMCP handshake and then
+  silently 401s against kvmd -- a failure that reads like an IPMI fault rather
   than a stale mapping.
 
   Values move via stdin only: never on argv, never printed.
 
 .NOTES
-  Two traps this guards against, both met for real on 2026-09-01:
+  Traps this guards against, all met for real on 2026-09-01:
 
-  * CR INJECTION — piping from PowerShell into a Linux guest appends \r, which
-    silently corrupts the stored password. Everything is normalised to LF on the
-    far side and the result is byte-checked.
+  * CR INJECTION. PowerShell appends a carriage return to anything it pipes.
+    CR is 0x0D, outside the printable-ASCII class kvmd requires, so
+    kvmd-htpasswd rejects the password as "not a valid passwd characters" --
+    which reads as a charset problem rather than a line-ending one. BOTH writes
+    go through one here-string that strips CR on the FAR side, where quoting is
+    safe. Do not "simplify" either back into a direct PowerShell pipe.
 
-  * PASSWORD LENGTH — kvmd's SET rule is stricter than its LOGIN rule.
-    validators/auth.py: login  ^[\x20-\x7e]{5,63}
-                        setting ^[\x20-\x7e]{10,63}
-    A 9-char password authenticates but cannot be set, and the error names the
-    character class rather than the length. Checked up front here.
+  * PASSWORD LENGTH. kvmd's SET rule is stricter than its LOGIN rule.
+    validators/auth.py: login 5-63 chars, setting 10-63. A 9-char password
+    authenticates but cannot be set. Checked up front so the failure is legible.
+
+  * VERIFY, DO NOT TRUST THE EXIT CODE. An earlier version reported success
+    while writing a corrupted password, because a mangled `tr -d` still exited
+    zero. The last step re-derives the hash and compares -- the only check that
+    actually proves both places agree.
 
 .EXAMPLE
   ob.ps1 glkvm -- pwsh -NoProfile -File tools\apply-vaulted-credential.ps1 192.0.2.15
@@ -40,28 +46,24 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if ($DeviceIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
-    throw "'$DeviceIp' is not a bare IPv4 address (refusing hostnames — mDNS can hit the wrong unit)"
+    throw "'$DeviceIp' is not a bare IPv4 address (refusing hostnames - mDNS can hit the wrong unit)"
 }
 
 $u  = ${env:KVMD-HT-USER}
 $pw = ${env:KVMD-HT-PASSWORD}
 if (-not $u -or -not $pw) {
-    throw "KVMD-HT-USER / KVMD-HT-PASSWORD not in the environment — run me under: ob.ps1 glkvm -- ..."
+    throw "KVMD-HT-USER / KVMD-HT-PASSWORD not in the environment - run me under: ob.ps1 glkvm -- ..."
 }
 
-# Fail loudly on the length rule BEFORE touching the device, so the failure is
-# legible instead of arriving as a character-class complaint from kvmd-htpasswd.
 if ($pw.Length -lt 10 -or $pw.Length -gt 63) {
-    # NOTE the parens: -f binds tighter than +, so formatting a concatenation
-    # without them applies -f to the LAST fragment only and leaves {0} literal.
     throw (("vaulted password is {0} chars; kvmd requires 10-63 to SET one " +
             "(validators/auth.py valid_new_passwd). Vault a longer value.") -f $pw.Length)
 }
 if ($pw -notmatch '^[\x20-\x7e]+$') {
-    throw "vaulted password contains non-printable-ASCII characters; kvmd requires [\x20-\x7e]"
+    throw "vaulted password is not printable ASCII; kvmd requires it"
 }
 
-Write-Host ("  user '{0}', password {1} chars — values not shown" -f $u, $pw.Length)
+Write-Host ("  user '{0}', password {1} chars - values not shown" -f $u, $pw.Length)
 
 $sshArgs = @('-i', $KeyPath, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
              '-o', 'StrictHostKeyChecking=accept-new', "root@$DeviceIp")
@@ -69,18 +71,17 @@ $sshArgs = @('-i', $KeyPath, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
 & ssh @sshArgs 'true'
 if ($LASTEXITCODE -ne 0) { throw "cannot ssh to $DeviceIp" }
 
-Write-Host "[1/3] kvmd-htpasswd"
-$users = & ssh @sshArgs 'kvmd-htpasswd list'
-$verb = if ($users -contains $u) { 'set' } else { 'add' }
-$pw | & ssh @sshArgs "kvmd-htpasswd $verb $u -i" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "kvmd-htpasswd $verb failed" }
-Write-Host "      $verb '$u' OK"
-
-Write-Host "[2/3] /etc/kvmd/ipmipasswd mapping"
+# ONE remote script does both writes, so they cannot drift apart.
 $remote = @'
 read -r U; read -r P
 U=$(printf '%s' "$U" | tr -d '\r')
 P=$(printf '%s' "$P" | tr -d '\r')
+
+printf '%s' "$P" | kvmd-htpasswd set "$U" -i >/dev/null 2>&1 \
+  || printf '%s' "$P" | kvmd-htpasswd add "$U" -i >/dev/null 2>&1 \
+  || { echo "      FAIL: kvmd-htpasswd rejected the password"; exit 1; }
+echo "      kvmd-htpasswd written"
+
 cp /etc/kvmd/ipmipasswd /etc/kvmd/ipmipasswd.bak
 python3 - "$U" "$P" <<PY
 import sys
@@ -95,16 +96,36 @@ for line in open(path):
 open(path, "w", newline="\n").write("".join(out))
 PY
 chmod 600 /etc/kvmd/ipmipasswd
-# prove no CR survived, without ever rendering the secret
-if grep -q $'\r' /etc/kvmd/ipmipasswd; then echo "      FAIL: CR present"; exit 1; fi
-echo "      mapping written, no CR"
-'@
-"$u`n$pw" | & ssh @sshArgs $remote
+echo "      ipmipasswd mapping written"
 
-Write-Host "[3/3] verify (masked)"
-& ssh @sshArgs 'echo "      users  : $(kvmd-htpasswd list | tr "\n" " ")"; awk "!/^[[:space:]]*#/ && NF {gsub(/[^ :>-]/,\"x\"); print \"      mapping: \" \$0}" /etc/kvmd/ipmipasswd'
+python3 - "$U" "$P" <<PY
+import sys, base64, hashlib
+u, p = sys.argv[1], sys.argv[2]
+line = [l for l in open("/etc/kvmd/user/htpasswd") if l.startswith(u + ":")][0].strip()
+h = line.split(":", 1)[1]
+# kvmd stores {SSHA512}: base64(sha512(password + salt) + salt), 8-byte salt.
+# NOT crypt and NOT bcrypt -- verifying with crypt.crypt() returns a confident
+# False for a perfectly good password, which cost real time on 2026-09-01.
+if not h.startswith("{SSHA512}"):
+    print("      VERIFY unknown hash scheme   : %s" % h[:10]); raise SystemExit(1)
+raw = base64.b64decode(h[9:])
+digest, salt = raw[:64], raw[64:]
+ok_ht = hashlib.sha512(p.encode() + salt).digest() == digest
+m = [l for l in open("/etc/kvmd/ipmipasswd")
+     if l.strip() and not l.lstrip().startswith("#")][0].rstrip("\n")
+ok_ip = m.endswith(":" + p) and "\r" not in m
+print("      VERIFY htpasswd {SSHA512}    : %s" % ok_ht)
+print("      VERIFY ipmipasswd matches    : %s" % ok_ip)
+raise SystemExit(0 if (ok_ht and ok_ip) else 1)
+PY
+'@
+
+"$u`n$pw" | & ssh @sshArgs $remote
+if ($LASTEXITCODE -ne 0) {
+    throw "credential apply FAILED verification - the two places may disagree"
+}
 
 Write-Host ""
-Write-Host "  done — both places in sync."
+Write-Host "  done - both places verified in sync."
 Write-Host "  NOTE: auth is currently disabled (kvmd.auth.enabled: false), so this"
 Write-Host "        credential is not exercised by the UI/API until that is reverted."
