@@ -28,3 +28,6 @@ venv/
 
 # Firmware signing keypair. PRIVATE KEY - never commit.
 .signing-key/
+
+# Device rollback checkpoints (large, reproducible)
+checkpoints/
