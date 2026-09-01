@@ -404,6 +404,113 @@ symbols ever matter.
 
 ---
 
+## Route 10 — the firmware image format, fully decoded
+
+All measured on `glkvm-RM10-1.10.0-0715-1784101556.img` (2026-09-01).
+
+### Container layout
+
+```
+offset            contents
+----------------  --------------------------------------------------------
+0x00000000        RKFW header, 0x66 bytes
+0x00000066        loader (MiniLoaderAll), 451,008 bytes
+0x0006e226        RKAF blob, 304,125,952 bytes  (= header@4 "length")
+0x12277a26        RKCRC32 over the RKAF blob, 4 bytes, LITTLE-endian
+0x12277a2a        Ed25519 signature, 64 bytes
+0x12277a6a        MD5 of everything above, as 32 ASCII hex chars
+0x12277a8a        EOF (304,577,162)
+```
+
+**RKFW header fields** (all `<u32` unless noted):
+
+| Offset | Value here | Meaning |
+| --- | --- | --- |
+| `0x00` | `RKFW` | magic |
+| `0x04` | `0x66` (u16) | header size |
+| `0x19` | `0x66` | loader offset |
+| `0x1d` | `451008` | loader size |
+| `0x21` | `0x6e226` | image (RKAF) offset |
+| `0x25` | `304125956` | image size = RKAF length **+ 4** (the CRC) |
+| `0x29` | `ED25` | signature-type marker |
+
+**RKAF header**: `RKAF` magic, `<u32 length` @4, `model[34]` @8, `id[30]` @42,
+`manufacturer[56]` @72, `<u32 version` @132, `<u32 num_parts` @136, then
+`num_parts` × 112-byte entries from @140. Each entry: `name[32]`,
+`filename[60]`, `<u32 pos` @96 (offset within the RKAF blob), `<u32 flash_offset`
+@100, `<u32 size` @108.
+
+### ⭐ The two checksums — both identified by measurement
+
+1. **RKCRC32 over the RKAF blob**, 4 bytes little-endian, immediately after it.
+   **Polynomial `0x04c10db7`** — note `0DB7`, *not* the standard CRC-32
+   `0x04c11db7` — MSB-first, `init 0`, no final XOR, no reflection. Verified:
+   computes `0x416f610c`, which is exactly the stored value. The standard
+   polynomial gives `0x3e6e1346` and is wrong.
+2. **MD5 of `file[:-32]`** — i.e. everything including the signature — stored as
+   32 lowercase ASCII hex characters at the very end. Verified: computes
+   `398fbb3780e4470e7d041131997a7ac2`, matching the stored tail exactly.
+
+The 64-byte Ed25519 signature cannot be forged without GL.iNet's key. It does
+not need to be: `POST /api/upgrade/start?skip_verify=true` skips
+`fwtools verify` entirely, and the non-skippable gate is `check_image_validity`,
+which is on-device and can be used as an oracle for a rebuilt image.
+
+### ⭐ The rootfs rebuild is bit-for-bit reproducible
+
+`mksquashfs 4.6.1 -comp gzip -b 131072` (defaults otherwise) rebuilds GL.iNet's
+rootfs so that **exactly 3 bytes of 224 MB differ** — offsets 9, 10, 11, which
+are the `mkfs_time` field (offset 8 matched by coincidence):
+
+```
+vendor : mkfs_time=1784101549  2026-07-15 07:45:49
+ours   : mkfs_time=1788283700  2026-09-01 17:28:20
+```
+
+`bytes_used` (223,958,876) and the 2,212-byte tail padding match exactly. Pass
+`-mkfs-time 1784101549` and the rebuild is byte-identical. So our packing
+options are provably the same ones GL.iNet used, and a *modified* repack is
+structurally indistinguishable from vendor output.
+
+Note the **RM10 rootfs is gzip**, not zstd — the RM1 1.10.0 image was zstd.
+Superblock: squashfs v4.0, 13,550 inodes, 128 KiB block, 974 fragments,
+flags `0xc0` (= `DUPLICATES | EXPORTABLE`, i.e. mksquashfs defaults).
+
+### Baking provisioning into the image — and why `/etc/init.d` works there
+
+A modified rootfs was built with the classic-UI nginx block uncommented,
+`override.yaml` installed, and `S99kvmd-vnc` placed in **`/etc/init.d/`**.
+
+⭐ **In a rebuilt base image, `/etc/init.d` is the correct location** — the
+overlay trap does not apply. `rcS` globs `/etc/init.d/S??*` from the read-only
+squashfs, so a script baked into the image *is* seen; it is only overlay-added
+scripts that are invisible. This is the one context where the rule inverts.
+
+Result: 223,965,184 bytes, one 4 KiB block larger than stock, against a rootfs
+partition of 1 GiB (`0x38000`→`0x238000` sectors) — ample headroom.
+
+### The build VM
+
+Repacking needs `mksquashfs`, which exists on neither Workstation nor the KVM.
+Built a throwaway VM rather than cluttering the desktop:
+
+| | |
+| --- | --- |
+| Name | `glkvm-build` (`vm-1263`), 192.0.2.160 |
+| Template | `Ubuntu-2404-template` (`vm-1212`) — **not** `ubuntu-2604-template` |
+| Host / datastore | 198.51.100.15 (esxi-host) |
+| Seeded by | NoCloud ISO, volume id `CIDATA`, per [[ubuntu-2404-template]] |
+| Toolchain | squashfs-tools 4.6.1 (gzip/lzo/lz4/xz/zstd/lzma), zstd, python3 |
+| Disk | **IndependentNonPersistent** — every power-on is a clean box |
+| CD | detached: `RemotePassthroughBackingInfo`, `startConnected=False` |
+
+⚠ **The disk is non-persistent by design**: work done on it is discarded at
+power-off. The toolchain survives because it was installed *before* the flip.
+Copy anything you want to keep off the VM before powering it down.
+
+Provisioned with PowerCLI under `ob.ps1 esxi` (OpenBao injects vCenter creds as
+env vars — never printed, never on argv).
+
 ## The 10 routes — status on `.15`
 
 | # | Route | Status | Note |
