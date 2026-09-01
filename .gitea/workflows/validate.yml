@@ -36,36 +36,79 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # shellcheck comes from pip, not apt. Every other workflow on this runner
-      # is pip-only, and shellcheck-py ships the same upstream binary in a wheel
-      # — no sudo, no apt sources, nothing to differ between runner images.
+      # EVERYTHING IS TEED TO ci.log AND UPLOADED, PASS OR FAIL.
       #
-      # Installed rather than allowed to skip: under --ci a skip IS a failure,
-      # and shell bugs are this repo's dominant failure mode (unquoted $SSH
-      # under a changed IFS; ssh eating a read loop's stdin).
+      # This Gitea (1.24.7) exposes no usable job-log API: /actions/runs 404s,
+      # /actions/jobs/{id}/logs 404s, and the web route the UI uses wants a CSRF
+      # token. So a red job is a red square with no reason attached, and the
+      # only honest way to debug it was to guess. An uploaded artifact is
+      # readable through /api/v1/repos/{owner}/{repo}/actions/artifacts.
       #
-      # Both pins are deliberate. An unpinned linter makes CI non-reproducible,
-      # which has already been paid for once on the sleepiq repo.
-      - name: Install shellcheck and PyYAML (PINNED)
+      # The step is written not to fail; the recorded status is re-raised at the
+      # end, AFTER the upload has run.
+      - name: Environment, install and selftest (captured)
+        id: run
         run: |
-          set -euo pipefail
-          python3 -m pip install --quiet --upgrade pip
-          python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
-          # pip may land console scripts outside PATH on this image.
-          python3 -c "import shellcheck_py, pathlib, sys; print(pathlib.Path(shellcheck_py.__file__).parent)"
-          shellcheck --version | head -2 || {
-            echo "::error::shellcheck installed but not on PATH"
-            exit 1
-          }
-          python3 -c "import yaml; print('pyyaml', yaml.__version__)"
+          set -uo pipefail
+          exec > >(tee -a ci.log) 2>&1
+          echo "=== environment ==="
+          echo "uname     : $(uname -a)"
+          echo "whoami    : $(whoami)"
+          . /etc/os-release 2>/dev/null && echo "distro    : ${PRETTY_NAME:-unknown}"
+          echo "python3   : $(command -v python3 || echo MISSING) $(python3 -V 2>&1 || true)"
+          echo "pip module: $(python3 -m pip --version 2>&1 | head -1)"
+          echo "shellcheck: $(command -v shellcheck || echo 'not preinstalled')"
+          echo "PATH      : $PATH"
 
-      # One command covers shell syntax, shellcheck, Python compilation,
-      # override.yaml.example validation, the firmware packer selftest, and the
-      # regression tests for the three silent bugs above.
-      - name: Selftest (skipped checks count as failures)
+          echo "=== install (pinned) ==="
+          # Not apt: every other workflow on this runner is pip-only. Try the
+          # pip module, then ensurepip, then apt as a last resort -- and say
+          # which one worked, because that is the fact that was missing.
+          rc=0
+          python3 -m pip install --quiet --upgrade pip 2>&1 || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "python3 -m pip unavailable (rc=$rc); trying ensurepip"
+            python3 -m ensurepip --upgrade 2>&1 || echo "ensurepip failed too"
+          fi
+          python3 -m pip install --quiet --break-system-packages \
+              "shellcheck-py==0.10.0.1" "PyYAML==6.0.2" 2>&1 \
+            || python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2" 2>&1 \
+            || { echo "pip install failed; falling back to apt"; \
+                 sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck python3-yaml; }
+
+          # pip console scripts often land outside PATH on runner images.
+          for d in "$HOME/.local/bin" /usr/local/bin; do
+            [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac
+          done
+          export PATH
+          echo "shellcheck now: $(command -v shellcheck || echo STILL MISSING)"
+          shellcheck --version 2>&1 | head -2 || true
+          python3 -c "import yaml; print('pyyaml', yaml.__version__)" 2>&1 || true
+
+          echo "=== selftest --ci ==="
+          ./tools/selftest.sh --ci
+          echo "SELFTEST_RC=$?" | tee ci.rc
+
+      - name: Upload the log whatever happened
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: ci-log
+          path: |
+            ci.log
+            ci.rc
+
+      # Re-raise the real result only after the log is safely uploaded.
+      - name: Fail if the selftest failed
+        if: always()
         run: |
           set -euo pipefail
-          ./tools/selftest.sh --ci
+          rc=$(sed -n 's/^SELFTEST_RC=//p' ci.rc 2>/dev/null | tail -1)
+          echo "recorded selftest rc: ${rc:-<none>}"
+          if [ "${rc:-1}" != "0" ]; then
+            echo "::error::selftest failed - download the ci-log artifact for the reason"
+            exit 1
+          fi
 
       # The device checks are deliberately NOT here. The runner has no route to
       # the KVMs and no key for them, and a CI job that quietly cannot reach
