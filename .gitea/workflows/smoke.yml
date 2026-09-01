@@ -1,22 +1,25 @@
 name: Smoke
 
-# A POSITIVE CONTROL, not a real check.
+# POSITIVE CONTROL AND BISECT, not a real check.
 #
-# validate.yml failed six times producing no output and no artifact, which means
-# the job died before any step of mine ran. Every fix so far has been a guess at
-# which feature the runner lacks. This job uses the smallest possible surface —
-# no checkout, no marketplace action, no shell declaration, no `set -e` — so its
-# result answers one question: does this runner execute anything at all?
+# validate.yml failed six times producing no output and no artifact, so the job
+# was dying before any step of mine ran. The bare `smoke` job below then passed,
+# which proved the runner executes workflows fine and the fault is a feature
+# validate.yml uses and smoke did not.
 #
-# If this is green and validate.yml is red, the fault is in something
-# validate.yml uses and this does not, and the difference can be bisected.
-# If this is red too, the problem is the runner or the repo, not the workflow.
+# Rather than keep guessing one feature per push, each job below adds exactly
+# ONE of the suspects to the known-good baseline. Whichever goes red names the
+# cause. They are tiny, so the shared capacity-1 runner clears them quickly.
+#
+# DELETE THIS FILE once validate.yml is green — a diagnostic left running
+# forever is noise, and it occupies a runner other sessions are queueing for.
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
+  # Baseline: known good.
   smoke:
     runs-on: ubuntu-latest
     steps:
@@ -24,10 +27,39 @@ jobs:
         run: |
           echo "runner executed a step"
           echo "shell   : $0"
-          echo "uname   : $(uname -a)"
-          echo "whoami  : $(whoami)"
-          echo "pwd     : $(pwd)"
-          echo "python3 : $(command -v python3 || echo missing)"
           echo "bash    : $(command -v bash || echo missing)"
-          echo "git     : $(command -v git || echo missing)"
+          echo "python3 : $(command -v python3 || echo missing)"
           echo "node    : $(command -v node || echo missing)"
+
+  # Suspect 1: the checkout action.
+  smoke-checkout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          echo "checkout worked"
+          ls -la | head -20
+
+  # Suspect 2: declaring bash as the shell.
+  smoke-bash:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "bash shell + set -euo pipefail worked"
+          echo "process substitution:"
+          exec > >(tee -a /tmp/smoke.log) 2>&1
+          echo "  tee via process substitution worked"
+
+  # Suspect 3: the artifact upload, which needs the runner's artifact server.
+  smoke-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "hello from artifact job" > note.txt
+      - uses: actions/upload-artifact@v3
+        with:
+          name: smoke-note
+          path: note.txt
