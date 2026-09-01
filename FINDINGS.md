@@ -511,6 +511,64 @@ Copy anything you want to keep off the VM before powering it down.
 Provisioned with PowerCLI under `ob.ps1 esxi` (OpenBao injects vCenter creds as
 env vars — never printed, never on argv).
 
+## Routes 4 and 5 COMPLETE — IPMI works, auth is passwordless
+
+### Route 5 — passwordless
+
+`kvmd.auth.enabled: false` in `/etc/kvmd/override.yaml`. Measured effect: the
+REST API returns **200 unauthenticated** where it returned 401 all session
+(`/api/info`, `/api/atx`). Applies to the web UI, the API, and VNC's VeNCrypt
+path. Revert by deleting that block and restarting kvmd.
+
+### Route 4 — IPMI
+
+`pip install pyghmi` on-device fixed the `ModuleNotFoundError` that made
+`kvmd-ipmi` unstartable. **Note pip also upgraded `cffi` 1.16.0 → 2.1.1 and
+pulled in `cryptography`** on a live system — kvmd was re-checked afterwards
+(imports, `--dump-config` exit 0, all services healthy).
+
+Working end to end from another host:
+
+```
+ipmitool -I lanplus -H 192.0.2.15 -U admin -P admin power status
+  -> Chassis Power is off
+```
+
+⛔ **Two findings worth keeping:**
+
+1. **The shipped `admin:admin` IPMI entry authenticates.** Before any change,
+   the daemon log showed the RAKP handshake completing and reaching
+   `Performing request atx.get_state() from IPMI user 'admin'`. It only failed
+   at the second hop (`401`) because the template's KVMD-side password was
+   stale. Anyone on the LAN could complete IPMI auth against a stock unit.
+2. **Disabling auth silently completed the IPMI chain.** The same call that
+   returned 401 started returning `Chassis Power is off` once
+   `kvmd.auth.enabled: false` was set — because the KVMD API stopped checking.
+   So route 5 changed route 4's behaviour without either being touched.
+
+### The KVMD credential
+
+A 28-character random password was generated and set with
+`kvmd-htpasswd set admin -i` (stdin, never on argv). `/etc/kvmd/ipmipasswd` now
+maps `admin:admin -> admin:<that password>`, mode `0600`.
+
+⚠ **Not yet vaulted.** Both on-disk OpenBao rw tokens
+(`%LOCALAPPDATA%\mainloop\openbao_rw.token`, `D:\stage\ob_rw.token`) return
+**403 on every operation their own policy grants** — `read` on
+`secret/data/agentvault/*`, `lookup-self`, `renew-self` — while the ro token
+succeeds over the identical SSH-to-appliance transport
+(`ttl=2374695s renewable=True policies=openbao-ro`). Both rw copies are 26-char
+`s.`-prefixed and decode cleanly from UTF-16-BOM.
+
+⭐ **Two traps met on the way, both mine:** a 403 on `lookup-self` says nothing
+about validity in a hardened container, and `openbao_run.py` falls back to the
+env var literally named `OPENBAO_ROOT_TOKEN` — passing `--token-env` alone can
+mean no token is sent at all, which looks exactly like a permissions failure.
+
+The password is recoverable from `/etc/kvmd/ipmipasswd` on `.15` until it is
+vaulted, so nothing is lost. Target: `secret/agentvault/glkvm`, key
+`KVMD_ADMIN_PASSWORD` — its own project, per Lewis.
+
 ## Route 10 COMPLETE — we can build, modify AND sign firmware
 
 Verified end to end on `.15` with the device's own tools:
