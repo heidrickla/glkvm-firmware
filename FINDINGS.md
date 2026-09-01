@@ -422,16 +422,20 @@ changes, is the real argument for the image route.
 
 ---
 
-## Alternative hardware, if the goal is "not GL.iNet"
+## Third-party KVM stacks on this hardware — not a route
 
-From published reviews, not tested here: JetKVM (~$103, Go, fully open),
-PiKVM V4 Mini (~$270, GPLv3, IPMI/Redfish), Sipeed NanoKVM (~$70 — read its
-security history first), BliKVM v4.
+Asked and answered so it does not get re-investigated: **you cannot swap the
+whole stack for a different open KVM project on an RM1.**
 
-Not viable on this hardware: upstream PiKVM assumes a Raspberry Pi, and
-[One-KVM](https://github.com/mofeng-git/One-KVM) supports OneCloud, OEC/OECT,
-Phicomm N1 and VMs — no RV-class Rockchip, no RM1. Porting either means
-rewriting the video/HID glue GL.iNet already published under GPLv3.
+- **Upstream PiKVM** assumes a Raspberry Pi. The RM1's capture path is
+  `rkipc` on an RV1126 behind an LT6911C — there is no Pi-shaped hardware for
+  it to bind to.
+- **[One-KVM](https://github.com/mofeng-git/One-KVM)** supports OneCloud,
+  OEC/OECT, Phicomm N1 and VMs. No RV-class Rockchip, no RM1.
+
+Porting either means rewriting exactly the video and HID glue GL.iNet already
+publishes under GPLv3 — i.e. reimplementing the thing you already have the
+source to. Modify the stock stack instead; that is what Routes 1-4 above are.
 
 ---
 
