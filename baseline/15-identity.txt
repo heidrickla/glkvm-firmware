@@ -1,0 +1,54 @@
+=== IDENTITY ===
++ echo '=== IDENTITY ==='
++ cat /proc/gl-hw-info/model
+rm10
++ echo
+
++ cat /etc/os-release
+NAME=Buildroot
+VERSION=rm10rc-1.8.1-release1-6-gfa876ddece
+ID=buildroot
+VERSION_ID=2024.02
+PRETTY_NAME="Buildroot 2024.02"
+ID_LIKE="buildroot"
+RK_BUILD_INFO="vscode@655b91d412f2 Thu Mar 19 11:05:47 UTC 2026 - rockchip_rv1126bp_gl_rm10"
++ echo '--- kvmd version ---'
+--- kvmd version ---
++ python3 -c 'import kvmd; print(kvmd.__version__)'
+4.82
+--- glweb bundles (identifies the build) ---
++ echo '--- glweb bundles (identifies the build) ---'
++ ls /usr/share/kvmd/glweb/assets/index-CddyYr6q.js
+/usr/share/kvmd/glweb/assets/index-CddyYr6q.js
++ echo
+
+=== UNAME / CPU ===
++ echo '=== UNAME / CPU ==='
++ uname -a
+Linux glkvmdesktop 6.1.141 #1 SMP Thu Mar 19 10:13:41 UTC 2026 aarch64 GNU/Linux
+
+=== OVERLAY / MOUNTS ===
++ echo
++ echo '=== OVERLAY / MOUNTS ==='
++ grep -E 'overlay|squash|ubi|root'
++ mount
++ head
+/dev/root on /rom type squashfs (ro,relatime,errors=continue)
+overlay:/overlay on / type overlay (rw,noatime,lowerdir=/,upperdir=/userdata/overlay/upper,workdir=/userdata/overlay/work)
+
+=== CLOUD STATE ===
++ echo
++ echo '=== CLOUD STATE ==='
++ cat /etc/glinet/gl-cloud.conf
+{
+  "enable": false,
+  "token": "<redacted-cloud-token>",
+  "uuid": "<redacted-cloud-uuid>",
+  "log_level": "INFO"
+}
+
++ echo
++ pgrep -a gl-cloud
++ pgrep -a rtty
+(blank above = not running)
++ echo '(blank above = not running)'
