@@ -30,14 +30,27 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 [ -n "$IP" ] || die "no device IP given.  usage: $0 <device-ip> <kvmd-dir>"
 [ -n "$LOCAL_DIR" ] || die "no local kvmd dir given."
 [ -d "$LOCAL_DIR" ] || die "'$LOCAL_DIR' is not a directory."
-[ -f "$LOCAL_DIR/__init__.py" ] || die "'$LOCAL_DIR' has no __init__.py — is that really the kvmd package?"
+# Accept EITHER a source tree (.py, e.g. the published GPLv3 repo) or a
+# byte-compiled one (.pyc). The device itself ships SOURCELESS .pyc only —
+# discovered 2026-09-01 — so a restore from a device backup has no .py at all.
+if [ ! -f "$LOCAL_DIR/__init__.py" ] && [ ! -f "$LOCAL_DIR/__init__.pyc" ]; then
+    die "'$LOCAL_DIR' has neither __init__.py nor __init__.pyc — is that really the kvmd package?"
+fi
 
 # Refuse anything that is not a bare IPv4 literal. This is the whole point:
 # no hostnames, no mDNS, no ambiguity about which of the three units is hit.
 echo "$IP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
   || die "'$IP' is not a bare IPv4 address. Refusing hostnames (see header)."
 
-SSH="ssh -p $SSH_PORT -o BatchMode=yes ${REMOTE_USER}@${IP}"
+# Prefer the dedicated project keypair if present, else default keys/agent.
+KEY="$(dirname "$0")/../.ssh-glkvm/id_ed25519"
+if [ -f "$KEY" ]; then
+    SSH="ssh -i $KEY -o IdentitiesOnly=yes -p $SSH_PORT -o BatchMode=yes ${REMOTE_USER}@${IP}"
+    SCP_KEY="-i $KEY -o IdentitiesOnly=yes"
+else
+    SSH="ssh -p $SSH_PORT -o BatchMode=yes ${REMOTE_USER}@${IP}"
+    SCP_KEY=""
+fi
 
 echo ">> target      : ${REMOTE_USER}@${IP}:${REMOTE_DIR}"
 echo ">> source      : ${LOCAL_DIR}"
@@ -58,13 +71,13 @@ $SSH "tar -czf - -C '$(dirname "$BACKUP_DIR")' '$(basename "$BACKUP_DIR")'" \
 
 echo ">> [3/5] uploading to staging dir ..."
 $SSH "rm -rf '$STAGE_DIR' && mkdir -p '$STAGE_DIR'"
-if ! scp -q -P "$SSH_PORT" -r "$LOCAL_DIR"/* "${REMOTE_USER}@${IP}:${STAGE_DIR}/"; then
+if ! scp -q $SCP_KEY -P "$SSH_PORT" -r "$LOCAL_DIR"/* "${REMOTE_USER}@${IP}:${STAGE_DIR}/"; then
     $SSH "rm -rf '$STAGE_DIR'" || true
     die "upload failed. Device untouched — $REMOTE_DIR is still intact."
 fi
 
-$SSH "[ -f '$STAGE_DIR/__init__.py' ]" \
-  || { $SSH "rm -rf '$STAGE_DIR'"; die "staged tree looks wrong (no __init__.py). Aborted."; }
+$SSH "[ -f '$STAGE_DIR/__init__.py' ] || [ -f '$STAGE_DIR/__init__.pyc' ]" \
+  || { $SSH "rm -rf '$STAGE_DIR'"; die "staged tree looks wrong (no __init__.py or .pyc). Aborted."; }
 
 echo ">> [4/5] swapping into place ..."
 if ! $SSH "rm -rf '${REMOTE_DIR}.old' \

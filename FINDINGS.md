@@ -462,9 +462,67 @@ Nothing to change. Note `tailscaled` **is** running (100.64.0.62).
    excluded. The same flaw broke `status`, which reported FAIL for a healthy
    daemon.
 
-Also hit: files edited on Windows picked up **CRLF**, making `#!/bin/sh` an
+Also hit: files edited on Windows picked up **CRLF**, making `#!/bin/sh
+` an
 invalid interpreter (`cannot execute: required file not found`). All shell
 deliverables are now written with explicit LF.
+
+### Route 3 — `apply_to_glkvm_safe.sh` — ✅ WORKS
+
+Tested by pulling the device's own kvmd tree and pushing it back unchanged —
+exercises backup / stage / atomic-swap with zero behavioural change.
+
+```
+>> [1/5] backing up remote tree ...
+>> [2/5] pulling backup to ./backups/kvmd-192.0.2.15-20260901-112551.tar.gz ...
+>> [3/5] uploading to staging dir ...
+>> [4/5] swapping into place ...
+>> [5/5] done.
+```
+
+After the swap: 226 files, `import kvmd` OK (4.82), `kvmd --dump-config` exit 0,
+kvmd/nginx/janus all running, 443 + 8888 + 5900 all still serving. On-device
+`diff -rq kvmd.old kvmd` reported **no content and no permission differences** —
+byte-faithful.
+
+(An apparent hash mismatch turned out to be my own error: comparing a
+Windows-computed aggregate hash against a busybox-computed one. The on-device
+`diff -rq` is the authoritative check, and it is clean.)
+
+Two more bugs found by running it:
+
+3. **The guard rejected the device's own tree.** It required `__init__.py`, but
+   the device ships **sourceless `.pyc` only** (`__init__.pyc`, `aiogp.pyc`, …)
+   — so a restore from a device backup was refused. Now accepts either.
+4. **It ignored the dedicated keypair.** I had added key preference to
+   `enable_classic_ui.sh` but not here, so it fell back to default keys and
+   could not connect at all.
+
+### Route 2 (IPMI half) — ❌ DOES NOT WORK on these units
+
+```
+ModuleNotFoundError: No module named 'pyghmi'
+  File "/usr/lib/python3.12/site-packages/kvmd/apps/ipmi/server.py", line 34
+```
+
+`/usr/bin/kvmd-ipmi` ships, but **`pyghmi` does not**, and neither does
+`ipmitool`. The daemon cannot start. My local dry-run *stubbed* `pyghmi`, so it
+could never have caught this — a case where the local harness was too generous.
+
+`pip 24.2` is on the device with 838 MB free, so `pip install pyghmi` would
+likely make it viable — but that needs egress to PyPI, which cuts against the
+de-clouding goal. Left uninstalled; flagged as a decision.
+
+The failed attempt was cleaned up (`/etc/init.d/S99kvmd-ipmi` and
+`/etc/kvmd/user/ipmi.enable` removed).
+
+### The device ships sourceless bytecode
+
+`/usr/lib/python3.12/site-packages/kvmd` contains **only `.pyc`** — no `.py`
+anywhere. You cannot read kvmd's code on the device; the published GPLv3 repo
+is the only source. It also means GL.iNet's own `apply_to_glkvm.sh` works by
+letting pushed `.py` files shadow the `.pyc`, since CPython prefers a source
+file when both are present.
 
 ### Deviations from the RM1-derived expectations
 
