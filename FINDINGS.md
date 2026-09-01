@@ -706,6 +706,486 @@ replaced with generated values. Read them on the VM to log in, and vault them.
 Correction to an earlier note: glkvm-cloud supports **arm64 as well as x86_64** —
 "x86_64 only" came from a stale search result, not the repo.
 
+## Virtual media (MSD) — works, with one sharp edge
+
+[measured] 2026-09-01 on `.15`. Nothing had to be enabled — `main.yaml` already
+carried `msd: {type: otg}`.
+
+| | |
+| --- | --- |
+| Backing store | `/dev/block/by-name/media` → `/dev/mmcblk0p10`, **27 GB exfat**, mounted at `/userdata/media` |
+| Free | 28.78 GB of 28.80 GB |
+| Gadget LUN | `/sys/kernel/config/usb_gadget/rockchip/functions/mass_storage.0/lun.0` |
+| Second LUN | `mass_storage.1/lun.0` exists, **empty, `ro=0 cdrom=0`** — a writable stick available alongside the CD |
+
+Full cycle proven end to end: upload → select as cdrom → connect, after which
+the LUN's `file` is the uploaded image with `ro=1 cdrom=1`.
+
+Images live on their own partition, **outside the overlay** — so they survive a
+config rollback or a `restore-checkpoint.sh`, but not a reflash.
+
+### The sharp edge — minimum image size
+
+The kernel gadget counts 2048-byte sectors in cdrom mode and refuses fewer than
+300 of them. Bracketed exactly [measured]:
+
+| bytes | sectors | `set_connected=1` |
+| --- | --- | --- |
+| 612352 | 299 | **HTTP 500** |
+| 614400 | 300 | HTTP 200 |
+
+The 500 body is only `Server got itself in trouble`. The actual reason appears
+nowhere in the API — just `mass_storage.0/lun.0: file too small` in `dmesg`.
+This is worth knowing because the obvious way to test MSD is with a tiny
+hand-rolled ISO, which fails and looks like a broken feature rather than an
+undersized file. `tools/msd.sh` checks the size locally and says so.
+
+### The storage list lags
+
+kvmd rescans `/userdata/media` on a timer rather than on demand, so for a few
+seconds after `remove` the API still lists the image and `write` fails with
+`MsdImageExistsError` against a file that is already gone from disk.
+`msd.sh upload` waits for the API's view to catch up, not the disk's.
+
+### Usage
+
+```
+tools/msd.sh 192.0.2.15 mount ubuntu.iso     # upload + attach as cdrom
+tools/msd.sh 192.0.2.15 mount disk.img --disk
+tools/msd.sh 192.0.2.15 status
+tools/msd.sh 192.0.2.15 detach
+```
+
+Honest limit: this is verified **device-side**. That the gadget accepts, backs
+and exposes the image is measured; that an attached machine actually boots it
+needs a real target and a real installer image, which has not been done.
+
+## Modifying kvmd modules — the mechanism, and the trap under it
+
+### The version string is a lie
+
+`.15` runs firmware **1.8.1**. The GPLv3 source we hold (`vendor/glkvm`
+@3e8dd23) is **1.10.0**. Both declare `kvmd.__version__ == "4.82"`.
+
+They are not the same code. Compiling the source on the device and comparing
+bytecode — skipping the 16-byte header, which carries only mtime and size —
+shows every module differs [measured]:
+
+| module | source | device |
+| --- | --- | --- |
+| `api/export.py` | 4128 B | 4166 B |
+| `info/__init__.py` | 5172 B | 5020 B |
+| `info/health.py` | 7190 B | 8042 B |
+| `api/msd.py` | 20810 B | 20106 B |
+
+GL.iNet never bumped the kvmd version between firmware releases, so the one
+identifier you would normally gate a port on is worthless here. Dropping
+1.10.0's `info/__init__.py` straight onto the device crashed kvmd at startup:
+1.8.1's `HealthInfoSubmanager` takes `(vcgencmd_cmd, ignore_past, state_poll)`,
+1.10.0's takes `(state_poll)`.
+
+**Always prove provenance first.** Bytecode is architecture-independent, so
+this works from any Python 3.12:
+
+```python
+py_compile.compile(src, cfile=tmp, doraise=True)
+open(tmp, "rb").read()[16:] == open(device_pyc, "rb").read()[16:]
+```
+
+When it differs, recover the real shape from the device rather than guessing —
+`marshal.loads(pyc[16:])` gives a code object whose `co_consts` and `co_names`
+expose the actual constants, and `inspect.signature` on an imported class gives
+the actual signature. That is how the two facts above were established.
+
+### The mechanism
+
+`patches/` mirrors the site-packages tree. `tools/apply-module.sh` installs one
+file, compiling it **on the device** and keeping the vendor `.pyc` alongside as
+`.pyc.orig` — written exactly once, so repeated applies can never lose the
+original.
+
+```
+tools/apply-module.sh 192.0.2.15 patches/kvmd/apps/kvmd/api/export.py
+tools/apply-module.sh 192.0.2.15 patches/kvmd/apps/kvmd/api/export.py --revert
+tools/apply-module.sh 192.0.2.15 --list
+```
+
+It compiles rather than dropping the `.py` in because the device ships kvmd
+sourceless and `.py` outranks `.pyc` in importlib's suffix order — a stray `.py`
+silently wins and leaves a mixed tree plus `__pycache__` no vendor image has.
+
+It deliberately does **not** restart kvmd, so a batch of modules costs one
+restart: `ssh root@<ip> '/etc/init.d/S98kvmd restart'`, then ~15 s.
+
+## Prometheus and hardware telemetry — both were dead, both now work
+
+[measured] 2026-09-01 on `.15`. Two separate faults, both shipped:
+
+**1. The Prometheus endpoint had never worked.** `GET /api/export/prometheus/
+metrics` returned HTTP 500 on a stock unit:
+
+```
+File ".../kvmd/apps/kvmd/info/__init__.py", line 65, in get_state
+KeyError: 'fan'
+```
+
+GL.iNet commented the `fan` submanager out of `InfoManager.__subs` but left
+`api/export.py` asking `get_state(["health", "fan"])` for it. Nothing else in
+the product touches that path, so it went unnoticed.
+
+**2. Health telemetry was collected by nothing.** Disassembling the device's
+`info/__init__.pyc` shows `InfoManager.__init__` registers only `system`,
+`auth`, `meta`, `extras`. `health.pyc` ships in the image and is never
+registered — so CPU temperature, load and memory were unreachable from both
+UIs and the API. `/api/info?fields=health` returned a validator error.
+
+Fixed with three patched modules:
+
+| patch | what it does |
+| --- | --- |
+| `api/export.py` | asks `InfoManager` only for submanagers it actually registered, so a disabled one costs a missing metric rather than the whole endpoint |
+| `info/health.py` | ported from 1.10.0 — drops the Raspberry-Pi `vcgencmd get_throttled` probe that failed every 5 s forever on RV1126, and adds network rate counters |
+| `info/__init__.py` | registers `health`, passing `state_poll` explicitly (the device config still carries an `ignore_past` option the ported health no longer takes) |
+
+`fan` is deliberately left unregistered: `kvmd.info.fan.unix` is `''` and there
+is no `kvmd-fan` daemon, so it could only ever report
+`{"monitored": false, "state": null}`.
+
+Result — `GET /api/export/prometheus/metrics` now returns 200:
+
+```
+pikvm_atx_enabled 1
+pikvm_atx_power 0
+pikvm_gpio_output_online_demo_button 0
+pikvm_hw_cpu_percent 7
+pikvm_hw_mem_available 698966016
+pikvm_hw_mem_percent 32.4
+pikvm_hw_mem_total 1034514432
+pikvm_hw_net_bytes_recv 47419647
+pikvm_hw_net_rx_rate 2388
+pikvm_hw_net_tx_rate 3164
+pikvm_hw_temp_cpu 45.03
+```
+
+`/api/info?fields=health` now works too, so both UIs can show it. Log is clean —
+zero errors after the change, against 13 in 60 lines before.
+
+Note `kvmd.prometheus.auth.enabled` defaults to **true**; the endpoint is open
+today only because auth is globally disabled. Re-enabling auth closes it.
+
+## How deep does the vendor glue actually go?
+
+Worth knowing before planning to replace any of it. Classifying the 36 source
+files GL.iNet added that upstream PiKVM does not have, by what each reaches out
+to [measured, by scanning the 1.10.0 source]:
+
+| tier | files | verdict |
+| --- | --- | --- |
+| **Pure Python** — no ubus, no GL binaries, no hardware | `api/serial.py` (22 KB), `api/turn.py`, `api/cloudflare.py`, `api/redfish.py`, `api/init.py`, `api/twofa.py`, `api/netbird_daemon.py`, `switch/sysfs_chain.py`, `hid/otg/touch.py`, `otg/hid/touch.py`, `utils.py`, `hid_otg_lifecycle.py`, `janus/pystun3.py` | 13 files. Ordinary Python we hold under GPLv3. Rewritable outright. |
+| **Subprocess wrappers** around OpenWrt/GL services | `api/tailscale.py`, `api/zerotier.py`, `api/netbird.py`, `api/fingerbot.py`, `api/wol.py`, `api/recorder.py`, `api/common.py`, `api/config_utils.py`, `api/rndis.py`, `streamer.py`, `plugins/atx/glatx.py`, `otg/mtp.py`, `switch/lib.py`, `init.py` | Replaceable, but you would be reimplementing their shell-outs. `glatx.py` — the power-control glue — is only **6.5 KB**. |
+| **ubus / `/etc/glinet` entangled** | `api/upgrade.py` (61 KB), `api/astrowarp.py`, `api/custom_screen.py`, `api/modem.py`, `api/repeater.py`, `api/ap.py` | Genuine OpenWrt integration. Mostly device management, not KVM function. |
+| **The monster** | `api/system.py` — **116 KB**, hits `/etc/glinet`, GL binaries and configfs | The one piece it would really hurt to reimplement. |
+
+The practical read: for **KVM function** we depend on `glatx.py` (6.5 KB),
+`streamer.py` (26 KB), `hid/otg` and `msd/otg` (both largely upstream). That is
+a small, tractable surface. The 116 KB of `system.py` is network and device
+administration — the GL.iNet product wrapper, not the KVM.
+
+So "rewrite the glue for more control" is a choice rather than a necessity: we
+hold the source for all of it. The friction is not the glue, it is that the
+device runs **1.8.1 while the source we hold is 1.10.0**, so each port needs
+the provenance check above. Closing that gap — running a firmware whose source
+we hold exactly — would make every module patchable without that step.
+
+## The front panel — what it really is, and drawing on it
+
+[measured] 2026-09-01 on `.15`.
+
+### It is not an OLED, and `kvmd-oled` cannot drive it
+
+The `kvmd-oled` entry point ships, and `/dev/i2c-1|3|5` exist, so this looks
+like the PiKVM OLED feature. It is not. `kvmd-oled` drives monochrome SSD1306 /
+SH1106 panels over i2c through `luma`, and:
+
+- **there is no i2c OLED.** A scan of buses 1 and 5 finds no display — only
+  `0x2c`/`0x44` on bus 1 and one busy address on bus 5. Bus 3 is held by
+  `/usr/sbin/lt86102sxe_setup`, the HDMI repeater, not a screen.
+- **`luma.core` is unimportable**, so `kvmd-oled` cannot even start:
+  `ModuleNotFoundError: No module named 'luma.core'`.
+
+⚠ That second point is easy to get wrong in both directions. `pip freeze` and
+`importlib.metadata.version()` both report `luma.core==2.6.0`, because
+`luma_core-2.6.0.dist-info` is present — but `site-packages/luma/` contains
+only `oled/`; the `core/` package files are absent. GL.iNet registered the
+distribution and shipped none of it.
+
+This predates anything we did: `luma/core/` has **0 files** in the
+pre-upgrade site-packages snapshot as well as every checkpoint since, so our
+package upgrade did not cause it. Checked because the directory's mtime falls
+inside our working window and looked incriminating.
+
+The RM10's panel is a **colour DSI LCD on the Rockchip display controller**:
+
+| | |
+| --- | --- |
+| Device | `/dev/fb0` (`rockchipdrmfb`) and `/dev/dri/card0` |
+| Framebuffer | **180×456 portrait**, 32 bpp, stride 720 |
+| As mounted | **456×180 landscape** — the panel is rotated |
+| Pixel order | **BGRA**. Swapped, the blue UI turns orange |
+| Owner | `/usr/sbin/gl_kvm_gui`, from `/etc/init.d/S39gl-kvm-gui` |
+
+So the framebuffer is the transpose of what the user sees: compose landscape,
+rotate 90° counter-clockwise on the way out. Getting that backwards still
+"works" and produces a sideways clipped mess.
+
+### Taking the panel needs two stops, not one
+
+`/usr/bin/gl_kvm_monitor` — Lua 5.4 bytecode, started by
+`/etc/init.d/S99gl_kvm_monitor` and running under `eco` — polls
+`pidof gl_kvm_gui` and runs `/etc/init.d/S39gl-kvm-gui start` the moment it
+disappears. Stop only the GUI and it returns within seconds and repaints over
+your work, which reads as a failed blit rather than a watchdog.
+
+That watchdog also supervises `connman`, `repeater`, `gl_kvm_ap`,
+`gl-kvm-modem` and `kvmd-rndis`, so it should not be left stopped for long.
+
+### Their assets are on the device
+
+`/etc/rm10-gui` — 18 MB, 6 fonts and 137 PNGs across 17 screens:
+
+```
+fonts/    DMSans-Medium, IBMPlexSans-{Regular,Medium,MediumItalic},
+          IBMPlexSansSC-{Regular,Medium}
+picture/  home (41)  net_info (22)  wifi (20)  welcome (13)  keyboard (6)
+          cloud_service (5)  dev_info (4)  hdmi_video (4)  hiboard (4) ...
+```
+
+`picture/home/internet_background.png` is the 456×180 planet backdrop;
+card icons are 30×30 (`{usb,km,hdmi_in,hdmi_out}_{connect,disconnect}.png`),
+status icons 22×22. We use them **in place** rather than copying them into this
+repo — they are GL.iNet artwork, and reading them off the device we are drawing
+on avoids redistributing them.
+
+### Their layout, measured
+
+Captured their own home screen (`dd if=/dev/fb0`, rotate) and found the
+luminance steps, so ours lines up:
+
+| element | y | detail |
+| --- | --- | --- |
+| status row | 8–26 | 22×22 icons, clock right-aligned |
+| headline | 40–68 | IBM Plex Sans Medium ~34 px, white |
+| subtitle | 82–93 | IBM Plex Sans Regular ~13 px, grey `#9aa3ad` |
+| card row | 104–166 | 4 cards, w=105, `x = 8 + i*111` |
+| └ icon | +13 | 30×30, centred |
+| └ label | +44 | ~13 px, centred |
+
+The cards are a *hint* of a plate, not a panel — interiors sit only ~8
+luminance above the backdrop, so alpha ≈ 30/255.
+
+⚠ `Image.paste(src, box, mask)` **ignores `src`'s own alpha** when a mask is
+given. Pasting an alpha-30 white plate through a solid rounded-rect mask paints
+opaque white and loses the planet behind it. The alpha has to live in the mask.
+
+### kvmd's API from on the device
+
+kvmd binds **no TCP port** — `server.unix = /run/kvmd/kvmd.sock`. nginx on :80
+answers `301` to https, so the obvious `http://127.0.0.1/api/...` returns a
+redirect rather than data. Go straight to the socket, and note nginx strips the
+`/api` prefix before proxying: kvmd itself sees `/hid`, not `/api/hid`.
+
+### Result
+
+`tools/panel.py` renders in their visual language from their own assets;
+`tools/panel.sh` drives it from the workstation.
+
+```
+tools/panel.sh 192.0.2.15 preview kvmd   # PNG only - panel untouched
+tools/panel.sh 192.0.2.15 capture        # what is on screen right now
+tools/panel.sh 192.0.2.15 show kvmd      # take the panel, draw once
+tools/panel.sh 192.0.2.15 run  kvmd 5    # take it and refresh every 5s
+tools/panel.sh 192.0.2.15 restore        # hand it back to GL.iNet
+```
+
+Two screens exist: `home` reproduces theirs (IP, Ethernet label, K&M / HD-IN /
+HD-OUT / USB cards driven by real kvmd state), and `kvmd` shows what their
+screen does not — CPU temperature as the headline, with CPU, memory, MSD media
+state and ATX power in the cards.
+
+Verified end to end: drew the `kvmd` screen to `/dev/fb0`, read the framebuffer
+back, and the read-back matches the render exactly — so rotation and BGRA order
+are both right. The panel was then handed back to `gl_kvm_gui`.
+
+## Three more features, tested and reversible
+
+[measured] 2026-09-01 on `.15`. All three were exercised end to end and the
+device was left exactly as found.
+
+### Wake-on-LAN — works, no setup needed
+
+| endpoint | verb | note |
+| --- | --- | --- |
+| `/api/wol/scan` | GET | ARP sweep via `gl-arp-scan -i <iface>` over eth0 and wlan0 |
+| `/api/wol/list` | GET | reads `/etc/kvmd/user/wol_list.json` |
+| `/api/wol/wake` | POST | `mac=` — sends via `/usr/sbin/ether-wake -i <iface>` |
+| `/api/wol/add` | POST | `mac=` required, `ip=` and `name=` optional |
+| `/api/wol/remove` | POST | `mac=` |
+
+Both binaries are present. A scan found **18 devices** on the LAN. Add → list →
+wake → remove ran clean, and `wol_list.json` was byte-identical (same MD5)
+before and after, so the whole cycle is non-destructive.
+
+Free power-on for anything on the LAN with no ATX wiring — the cheapest useful
+capability on the box.
+
+### MSD writable-stick mode — better designed than expected
+
+`/api/msd/partition_connect` and `partition_disconnect` are **GET, not POST**;
+posting them returns `405`, which reads like a missing route rather than a
+wrong verb.
+
+`partition_connect` **unmounts `/userdata/media` on the KVM** and attaches the
+raw block device to the gadget's second, normally idle LUN:
+
+```
+mass_storage.1/lun.0   file=/dev/mmcblk0p10   ro=0   cdrom=0
+```
+
+That unmount is the right call — two writers on one filesystem corrupts it —
+and it means GL.iNet already solved the problem the obvious naive
+implementation would have created. `partition_disconnect` detaches and
+remounts; 27 GB came back intact.
+
+⚠ The consequence is that the two MSD modes are **mutually exclusive**: while
+the stick is connected the ISO storage is gone, so `list` shows no images and
+`upload` has nowhere to write. While connected, the MSD API even reports the
+*rootfs* (1 GB) as its storage, because the media mount is absent and it falls
+back to the parent filesystem.
+
+Note the handlers also shell out to `/usr/bin/reset_udc`, **which does not
+exist on this device**. It evidently is not reached on the working path, but it
+is a landmine in the vendor code worth knowing about.
+
+Exposed as `tools/msd.sh <ip> stick on|off`.
+
+### TOTP two-factor — works, and needs nothing installed
+
+`pyotp 2.10.0` and `qrcode 8.2` are already on the device. All routes are
+**GET**:
+
+| endpoint | params | behaviour |
+| --- | --- | --- |
+| `/api/2fa/create` | — | returns a fresh 32-char base32 `secret` + `uri`. Does **not** persist it |
+| `/api/2fa/init` | `secret`, `key` | enrols — `key` must be a valid current code **for that secret** |
+| `/api/2fa/show` | — | `otpauth://` URI, issuer `GLKVM`, scannable by any authenticator |
+| `/api/2fa/verify` | `code` | correct → ok; wrong → `ForbiddenError` |
+| `/api/2fa/is_enabled` / `/api/2fa/delete` | — | state, and disable |
+
+The enrolment handshake is the standard one and worth spelling out, because
+getting it wrong looks like a broken endpoint: `create` hands you a secret but
+saves nothing, and `init` refuses with a bare **403 ForbiddenError** unless you
+send back a code you derived from that secret. Passing only `secret` — the
+obvious first guess — gives that same 403, which reads like an auth-gate
+problem rather than a missing proof-of-possession.
+
+Enrolment state is `/etc/kvmd/user/totp.secret` (0 bytes = disabled).
+
+Verified through the full cycle and then **deleted** — TOTP is left OFF, so
+there is no way this has locked anything.
+
+### Two that are NOT available, and why
+
+**Snapshots and OCR.** `/api/streamer/snapshot` and `/api/streamer/ocr` both
+`503`. The missing `libtesseract` (logged at every kvmd startup) is only the
+second problem; the first is that `/api/streamer` reports `"streamer": null`
+because **GL.iNet replaced ustreamer with Janus/WebRTC** — `kvmd-janus`,
+`janusRestAPIServer.py` (127.0.0.1:8081) and `janus` itself loading the
+ustreamer Janus plugin. kvmd's snapshot and OCR paths want a ustreamer instance
+that is never started.
+
+Going round it via V4L2 is not a shortcut. There are 40 `/dev/video*` nodes,
+all Rockchip CIF/ISP pipeline stages; `/dev/video0` reports 0×0 with no format
+and `/dev/video4` is a 40×30 Bayer ISP scaler. HDMI-in is configured by
+GL.iNet's own capture stack, so a frame grab means reproducing their
+media-ctl/ISP graph — and getting that wrong risks the video path the KVM
+exists to provide. `ustreamer`, `ffmpeg` and `v4l2-ctl` are all present, so it
+is doable; it is a project, not a switch.
+
+**SNMP.** NET-SNMP 5.9.3 and the `snmp` user ship, but there is **no
+`snmpd.conf` anywhere** — not in `/etc/snmp`, `/usr/share/snmp`,
+`/usr/lib/snmp` or `/root/.snmp`. Run in the foreground it says so plainly:
+
+```
+Warning: no access control information configured.
+  It's unlikely this agent can serve any useful purpose in this state.
+```
+
+`/etc/init.d/S59snmpd start` therefore prints nothing and leaves nothing
+listening, which looks like a broken init script rather than a missing config.
+`SNMPDOPTS` also binds `127.0.0.1` only. Low value now that Prometheus works.
+
+### One deliberately not tested
+
+`/api/hid/print` types text into the attached machine. The USB device
+controller reports `state=configured, speed=high-speed` and the host is
+returning keyboard LED state, so **a real machine is attached to `.15`**.
+Typing into a host we cannot see is not ours to decide — left for Lewis.
+
+## Reproducing a unit — and the regression hiding in provisioning
+
+`provision.sh` now has four steps, not three: classic UI, `override.yaml`, VNC,
+and **every module under `patches/`** (applied with `apply-module.sh`, then one
+kvmd restart for the whole batch). `deprovision.sh` gained the matching revert.
+
+Two things fell out of wiring that up.
+
+### A routine re-run would have silently switched auth back on
+
+Step 2 overwrites the live `/etc/kvmd/override.yaml` with the repo copy. `.15`
+carries `kvmd.auth.enabled: false` — deliberate, passwordless while the build
+settles — and `tools/override.yaml.example` **does not**. So re-running the
+provisioning script, the safest-looking thing in the repo, would have quietly
+re-enabled authentication on a unit whose whole point right now is that it is
+open.
+
+This is the failure mode worth naming: *provisioning is only idempotent with
+respect to the repo, not with respect to the device.* Any setting that exists
+on the unit but not in the repo copy is silently destroyed by a "no-op" run.
+
+Step 2 now diffs the two — comments and blank lines stripped, since those churn
+constantly — and **aborts** if the device holds lines the repo lacks, printing
+them. `--force` overrides. Verified against `.15`: it correctly refuses and
+names `enabled: false`.
+
+### override.yaml never took effect until a reboot
+
+The old script installed `override.yaml`, validated it with `kvmd --dump-config`,
+and never restarted kvmd. `--dump-config` proves the file *parses*, not that the
+running daemon has *loaded* it, so the config sat inert until something else
+happened to restart the stack. The new step 4 restart covers it.
+
+### Resolution, and the reboot test
+
+`tools/override.yaml.example` now carries `kvmd.auth.enabled: false` under a
+prominent banner, so the repo reproduces `.15` exactly rather than silently
+diverging. The banner spells out what "open" means here — both UIs, the whole
+REST API including MSD and HID, Redfish power control and the Prometheus
+endpoint all answer with no credentials — and how to close it (delete two
+lines; the credential is already vaulted and in sync).
+
+Verified end to end on `.15` [measured]:
+
+| check | result |
+| --- | --- |
+| `provision.sh` full run | all 4 steps ✓ |
+| Second run immediately after | identical, no changes — genuinely idempotent |
+| Vendor `.pyc.orig` after repeated applies | still distinct from live, so the originals were never overwritten |
+| **Reboot** | back in ~75 s; 443, 8888, 5900, MSD, ATX, Redfish and Prometheus all up |
+| Patches after reboot | all three still installed; health metrics and 13 Prometheus series live |
+
+So the claim in the script header — *survives reboot* — now covers the patched
+modules too, not just the UI and VNC.
+
 ## The 10 routes — status on `.15`
 
 | # | Route | Status | Note |
@@ -713,13 +1193,13 @@ Correction to an earlier note: glkvm-cloud supports **arm64 as well as x86_64** 
 | 1 | Classic PiKVM UI on :8888 | ✅ **live** | 200 + `PiKVM Login`; autostarts |
 | 2 | De-cloud | ✅ **already off** | `enable:false`; `gl-cloud`/`rtty` not running |
 | 3 | VNC | ✅ **live** | `RFB 003.008`; autostarts |
-| 4 | IPMI | ⛔ **blocked** | `pyghmi` absent → daemon cannot start. Gets you ATX power control via `ipmitool` and nothing else. Needs a decision. |
-| 5 | LDAP / PAM / RADIUS auth | ◐ **validated, not activated** | Both configs pass `kvmd --dump-config`. LDAP needs a server; PAM would change who can log in. |
+| 4 | IPMI | ⛔ **disabled on purpose** | `pyghmi` was installed and the daemon ran, but the RAKP handshake is unreliable. **Superseded by Redfish** — 6 power actions over HTTPS instead of 4 over UDP. |
+| 5 | LDAP / PAM / RADIUS auth | ◐ **validated, not activated** | Both configs pass `kvmd --dump-config`. LDAP needs a server; PAM would change who can log in. Auth itself is currently **passwordless** (`kvmd.auth.enabled: false`). |
 | 6 | Power/switch drivers (ugpio) | ✅ **live** | `cmd` driver loaded — kvmd logged `Running User-GPIO driver: demo`. `__wol__` is auto-injected by kvmd. |
 | 7 | Remote access (Tailscale/NetBird/ZeroTier/Cloudflare) | ✅ **already in use** | `.15` = `gl-rm10-workstation` 100.64.0.62; **netbird, zerotier AND cloudflared all running** |
-| 8 | Self-hosted relay (glkvm-cloud) | ⬜ **not started** | Needs an x86_64 Docker host + a domain. Redundant while 7 works. |
+| 8 | Self-hosted relay (glkvm-cloud) | ✅ **built** | `glkvm-relay` at **192.0.2.140**; both containers up. No devices onboarded yet. |
 | 9 | Patch kvmd in place | ✅ **verified** | Round-tripped the device's own tree; on-device `diff -rq` clean |
-| 10 | Repack the firmware image | ◐ **prereq done** | Correct **RM10** image fetched and hash-verified; unpacker confirmed on it (`model=rm10`, `manufacturer=RV1126B`, 10 partitions). Repack itself not attempted. |
+| 10 | Repack the firmware image | ✅ **complete** | `rk_pack.py --selftest` reproduces the vendor image byte-for-byte; a modified image passes the device's own `check_image_validity`, and `rk_sign.py` gives `Signature: OK` under our key. Not yet flashed. |
 
 ### Note for route 2
 
@@ -1108,6 +1588,11 @@ because the first changed the recommended route entirely.
 firmware/    3 images (gitignored) + SHA256SUMS + fetch.sh + partitions-1.10.0.json
 extracted/   3 rootfs squashfs (gitignored) + 110 config files from 1.10.0
 vendor/      glkvm @3e8dd23 (1.10.0), pikvm-kvmd @387846d (v4.213) — gitignored
-tools/       enable_classic_ui.sh, S99kvmd-{vnc,ipmi}, override.yaml.example,
-             apply_to_glkvm_safe.sh, rkfw_scan.py, webterm-snippets.md
+tools/       provision.sh, deprovision.sh, msd.sh, checkpoint.sh,
+             restore-checkpoint.sh, rk_pack.py, rk_sign.py, rkfw_scan.py,
+             enable_classic_ui.sh, S99kvmd-{vnc,ipmi}, override.yaml.example,
+             apply-vaulted-credential.ps1, apply_to_glkvm_safe.sh,
+             webterm-snippets.md
+checkpoints/ restorable snapshots (gitignored)
+wheels/      cross-built aarch64 wheels (gitignored)
 ```

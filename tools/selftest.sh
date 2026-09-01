@@ -1,0 +1,300 @@
+#!/bin/sh
+# selftest.sh - validate this repo's tooling. Runs in CI and locally.
+#
+#   ./tools/selftest.sh                     # offline checks only
+#   ./tools/selftest.sh --with-device <ip>  # adds live read-only checks
+#
+# EXIT 0 only when every check PASSED or was explicitly, loudly SKIPPED for a
+# reason printed in the output. Any FAIL exits 1.
+#
+# WHY THIS EXISTS, and why it is noisy on purpose
+#
+# The bugs that actually cost time in this repo were all SILENT:
+#
+#   * provision.sh called apply-module.sh with `>/dev/null 2>&1`, so when it
+#     passed an absolute path that the destination logic could not strip, every
+#     module "succeeded" while writing a junk .pyc tree into site-packages and
+#     patching nothing. Green output, zero effect.
+#   * drift.sh iterated with `for x in $LIST` under `IFS=$'\n'`, which stops an
+#     unquoted $SSH from word-splitting. Every remote probe failed identically,
+#     which the script cheerfully rendered as "could not determine state" for
+#     all three modules -- indistinguishable from a real OTA revert.
+#   * ssh inside a `while read` loop ate the loop's stdin, so only the first
+#     item was ever checked and the run still reported success.
+#
+# The common thread is not a logic error, it is suppressed output plus a
+# success-shaped result. So: this script never hides a command's stderr, and a
+# check that cannot run says SKIP loudly rather than quietly counting as a pass.
+# A silent green is treated as a bug in the test, not a property of the code.
+
+set -u
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+
+DEVICE=""
+CI=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --with-device) DEVICE="${2:-}"; shift 2 ;;
+        --ci)          CI=1; shift ;;
+        *)             shift ;;
+    esac
+done
+
+PASS=0; FAIL=0; SKIP=0
+
+pass() { PASS=$((PASS + 1)); printf '  \033[32mPASS\033[0m  %s\n' "$*"; }
+fail() { FAIL=$((FAIL + 1)); printf '  \033[31mFAIL\033[0m  %s\n' "$*"; }
+
+# skip <message> [structural]
+#
+# A skipped check is an UNVERIFIED check. Under --ci that is a failure, because
+# a pipeline can install whatever the check needs — letting it skip turns the
+# build green while proving nothing, which is the exact failure mode this
+# script exists to prevent.
+#
+# Pass "structural" for the two skips CI genuinely cannot resolve: build
+# artifacts are gitignored, and there is no KVM on a GitHub runner. Those stay
+# skips even under --ci, and are still printed.
+skip() {
+    _msg="$1"; _kind="${2:-}"
+    if [ "$CI" = "1" ] && [ "$_kind" != "structural" ]; then
+        FAIL=$((FAIL + 1))
+        printf '  \033[31mFAIL\033[0m  (skip not allowed under --ci) %s\n' "$_msg"
+    else
+        SKIP=$((SKIP + 1)); printf '  \033[33mSKIP\033[0m  %s\n' "$_msg"
+    fi
+}
+head_() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+# Private scratch. NOT a fixed /tmp path: those are shared between sessions, so
+# two runs stamp on each other and the loser silently reads the winner's data.
+TMPD=$(mktemp -d 2>/dev/null) || TMPD="${TMPDIR:-/tmp}/selftest.$$"
+mkdir -p "$TMPD"
+trap 'rm -rf "$TMPD"' EXIT INT TERM
+
+# floor <label> <count> <minimum>
+#
+# An enumerating check that finds nothing passes vacuously: `for f in *.sh`
+# after a rename or a moved directory iterates zero times and every assertion
+# inside it is trivially satisfied. 0 == 0 counts as agreement. So every
+# enumeration states how many items it MUST have found.
+floor() {
+    _label="$1"; _count="$2"; _min="$3"
+    if [ "$_count" -lt "$_min" ]; then
+        fail "$_label: found $_count, expected at least $_min - the enumeration is broken, not the code"
+    else
+        pass "$_label: enumerated $_count"
+    fi
+}
+
+# Run a command; on failure print its OUTPUT, never swallow it.
+try() {
+    _desc="$1"; shift
+    if _out=$("$@" 2>&1); then
+        pass "$_desc"
+    else
+        fail "$_desc"
+        printf '%s\n' "$_out" | sed 's/^/          /' | head -15
+    fi
+}
+
+# ---------------------------------------------------------------- shell syntax
+head_ "[1] shell scripts parse"
+NSH=0
+for f in "$HERE"/*.sh; do
+    [ -f "$f" ] || continue
+    NSH=$((NSH + 1))
+    try "sh -n $(basename "$f")" sh -n "$f"
+done
+floor "shell scripts" "$NSH" 8
+
+# ---------------------------------------------------------------- shellcheck
+head_ "[2] shellcheck"
+if command -v shellcheck >/dev/null 2>&1; then
+    NSC=0
+    for f in "$HERE"/*.sh; do
+        [ -f "$f" ] || continue
+        NSC=$((NSC + 1))
+        # SC2029 (client-side expansion in ssh) is intentional throughout:
+        # we build remote commands from local variables deliberately.
+        try "shellcheck $(basename "$f")" shellcheck -S warning -e SC2029 "$f"
+    done
+    floor "shellcheck targets" "$NSC" 8
+else
+    skip "shellcheck not installed - shell bugs like unquoted \$SSH under a changed IFS will NOT be caught here"
+fi
+
+# ---------------------------------------------------------------- python
+head_ "[3] python sources compile"
+PY=python3; command -v python3 >/dev/null 2>&1 || PY=python
+if command -v "$PY" >/dev/null 2>&1; then
+    NPY=0
+    for f in "$HERE"/*.py; do
+        [ -f "$f" ] || continue
+        NPY=$((NPY + 1))
+        try "compile $(basename "$f")" "$PY" -m py_compile "$f"
+    done
+    floor "python tools" "$NPY" 4
+    if [ -d "$ROOT/patches" ]; then
+        NPATCH=0
+        find "$ROOT/patches" -name '*.py' > "$TMPD/patches" 2>/dev/null || true
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            NPATCH=$((NPATCH + 1))
+            try "compile patches/$(printf '%s' "$p" | sed 's|.*/patches/||')" "$PY" -m py_compile "$p"
+        done < "$TMPD/patches"
+        # If patches/ exists at all it must hold the three modules we ship.
+        floor "patched modules" "$NPATCH" 3
+    else
+        fail "patches/ is missing - provision.sh would apply nothing and still report success"
+    fi
+else
+    fail "no python interpreter - cannot validate any of the Python tooling"
+fi
+
+# ---------------------------------------------------------------- config
+head_ "[4] override.yaml.example"
+if command -v "$PY" >/dev/null 2>&1; then
+    if "$PY" -c "import yaml" >/dev/null 2>&1; then
+        _out=$("$PY" - "$ROOT/tools/override.yaml.example" <<'PY' 2>&1
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+assert isinstance(d, dict), "not a mapping"
+missing = [k for k in ("kvmd", "vnc") if k not in d]
+assert not missing, "missing top-level keys: %s" % missing
+# auth.enabled is deliberately false today; assert it is EXPLICIT either way so
+# nobody flips the security posture of every provisioned unit by accident.
+auth = (d.get("kvmd") or {}).get("auth", {})
+assert "enabled" in auth, "kvmd.auth.enabled is not stated explicitly"
+print("auth.enabled=%s" % auth["enabled"])
+PY
+        ) && _rc=0 || _rc=$?
+        if [ "$_rc" -eq 0 ]; then pass "valid YAML, required keys present ($_out)"
+        else fail "override.yaml.example invalid"; printf '%s\n' "$_out" | sed 's/^/          /'; fi
+    else
+        skip "pyyaml not installed - override.yaml.example NOT validated"
+    fi
+fi
+
+# ---------------------------------------------------------------- regressions
+head_ "[5] regression tests for bugs that shipped silently"
+
+# apply-module.sh must map BOTH a relative and an absolute patch path to the
+# same in-tree destination. When it did not, provisioning wrote a junk tree
+# into site-packages and reported success for every module.
+derive() {
+    printf '%s' "$1" | sed 's|^\./||; s|.*/patches/||; s|^patches/||'
+}
+EXPECT="kvmd/apps/kvmd/api/export.py"
+NDERIVE=0
+for input in \
+    "patches/kvmd/apps/kvmd/api/export.py" \
+    "./patches/kvmd/apps/kvmd/api/export.py" \
+    "/d/PersonalProjects/glkvm-firmware/patches/kvmd/apps/kvmd/api/export.py" \
+    "/d/repo/tools/../patches/kvmd/apps/kvmd/api/export.py"
+do
+    NDERIVE=$((NDERIVE + 1))
+    got=$(derive "$input")
+    if [ "$got" = "$EXPECT" ]; then
+        pass "path derivation: $(printf '%s' "$input" | tail -c 46)"
+    else
+        fail "path derivation gave '$got' (want '$EXPECT') for '$input'"
+    fi
+done
+floor "path-derivation cases" "$NDERIVE" 4
+
+# The real script must agree with the model above.
+if grep -q 's|.\*/patches/||' "$HERE/apply-module.sh" 2>/dev/null; then
+    pass "apply-module.sh strips any leading path before patches/"
+else
+    fail "apply-module.sh no longer strips absolute paths - the junk-tree bug can recur"
+fi
+
+# ssh inside a read loop must not eat stdin.
+if grep -q 'ssh -n ' "$HERE/drift.sh" 2>/dev/null; then
+    pass "drift.sh uses ssh -n (will not swallow its own loop input)"
+else
+    fail "drift.sh lost 'ssh -n' - it will silently check only the first module"
+fi
+
+# provision.sh must not hide apply-module.sh output on failure.
+if grep -q 'apply-module.sh" "\$IP" "\$p" >/dev/null 2>&1' "$HERE/provision.sh" 2>/dev/null; then
+    fail "provision.sh still discards apply-module.sh output - failures will be invisible"
+else
+    pass "provision.sh surfaces apply-module.sh output"
+fi
+
+# Anything calling apply-module.sh from inside a `while read` loop must give it
+# </dev/null. apply-module.sh runs ssh, ssh reads stdin, and stdin there is the
+# patch list — so without it the first module eats the rest and the run reports
+# success having applied exactly one. This shipped twice.
+for caller in provision.sh deprovision.sh; do
+    if grep -q 'while IFS= read -r p' "$HERE/$caller" 2>/dev/null; then
+        if grep -q 'apply-module.sh".*</dev/null' "$HERE/$caller" 2>/dev/null; then
+            pass "$caller feeds apply-module.sh </dev/null inside its read loop"
+        else
+            fail "$caller calls apply-module.sh in a read loop WITHOUT </dev/null - only the first module will be processed"
+        fi
+    else
+        skip "$caller has no read loop to check"
+    fi
+done
+
+# ---------------------------------------------------------------- firmware
+head_ "[6] firmware packer"
+# Glob + case rather than `ls | grep` (SC2010): parsing ls breaks on unusual
+# filenames, and the vendor image is the one WITHOUT "custom" in its name --
+# our own signed build must not be used to selftest the packer against.
+IMG=""
+for _f in "$ROOT"/firmware/glkvm-RM10-*.img; do
+    [ -f "$_f" ] || continue
+    case "$_f" in *custom*) continue ;; esac
+    IMG="$_f"; break
+done
+if [ -z "$IMG" ]; then
+    skip "no RM10 image in firmware/ (gitignored) - rk_pack.py --selftest NOT run" structural
+elif ! command -v "$PY" >/dev/null 2>&1; then
+    skip "no python - rk_pack.py --selftest NOT run"
+else
+    try "rk_pack.py --selftest reproduces the vendor image byte-for-byte" \
+        "$PY" "$HERE/rk_pack.py" "$IMG" --selftest
+fi
+
+# ---------------------------------------------------------------- device
+head_ "[7] live device (read-only)"
+if [ -z "$DEVICE" ]; then
+    skip "no --with-device <ip> given - nothing was checked against real hardware" structural
+else
+    if ssh -n -i "$ROOT/.ssh-glkvm/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes \
+           -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "root@$DEVICE" true 2>/dev/null; then
+        pass "ssh to $DEVICE"
+        for spec in "443:https://$DEVICE/" "8888:https://$DEVICE:8888/login/" \
+                    "prometheus:https://$DEVICE/api/export/prometheus/metrics"; do
+            code=$(curl -sk --max-time 12 -o /dev/null -w '%{http_code}' "${spec#*:}" 2>/dev/null || echo 000)
+            [ "$code" = "200" ] && pass "${spec%%:*} HTTP $code" || fail "${spec%%:*} HTTP $code"
+        done
+        if "$HERE/drift.sh" "$DEVICE" >/tmp/.st_drift 2>&1; then
+            pass "drift.sh reports no drift"
+        else
+            fail "drift.sh reports drift"
+            sed 's/^/          /' /tmp/.st_drift | head -20
+        fi
+        rm -f /tmp/.st_drift
+    else
+        fail "cannot ssh to $DEVICE (asked for --with-device, so this is a failure, not a skip)"
+    fi
+fi
+
+# ---------------------------------------------------------------- summary
+printf '\n\033[1m=== %d passed, %d failed, %d skipped ===\033[0m\n' "$PASS" "$FAIL" "$SKIP"
+if [ "$SKIP" -gt 0 ]; then
+    echo "NOTE: skipped checks are NOT passes. Each one above says what went unverified."
+fi
+if [ "$FAIL" -gt 0 ]; then
+    echo "RESULT: FAILED"
+    exit 1
+fi
+echo "RESULT: OK"
+exit 0

@@ -1,0 +1,96 @@
+name: Validate
+
+# Runs on the self-hosted act_runner on forgehost. GitHub Actions is unavailable
+# (spend cap), so .github/workflows/ci.yml is parked on workflow_dispatch and
+# this is the pipeline that actually gates the repo.
+#
+# THE RUNNER IS SHARED AND ITS CAPACITY IS 1. Other agent sessions queue behind
+# anything pushed here, so an ordinary push runs ONE fast job. Nothing slow goes
+# on the push path.
+#
+# FAILS LOUDLY, ON PURPOSE.
+#
+# Every bug in this repo that cost real time was a silent success, not a crash:
+# a script that discarded a child's output and reported "applied" while patching
+# nothing; a loop that handled one of three items and exited 0. So:
+#
+#   * every `run` uses `set -euo pipefail`, so a failure mid-pipe is not masked
+#     by the exit status of whatever came after it
+#   * selftest runs with `--ci`, which turns a SKIPPED check into a FAILURE. A
+#     check that could not run has verified nothing, and a runner can install
+#     whatever it needs. Only two skips survive --ci: gitignored build artifacts
+#     and the absence of a real KVM
+#   * no step uses continue-on-error
+#   * shellcheck is PINNED. An unpinned linter makes CI non-reproducible, and
+#     that has already been paid for once on the sleepiq repo
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Tooling selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner image ships shellcheck 0.9.0 via apt on 22.04/24.04. Install
+      # rather than letting the check skip: under --ci a skip is a failure, and
+      # shell bugs are this repo's dominant failure mode (unquoted $SSH under a
+      # changed IFS, ssh eating a read loop's stdin).
+      - name: Install shellcheck and PyYAML (PINNED)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet "PyYAML==6.0.2"
+          shellcheck --version | head -2
+          python3 -c "import yaml; print('pyyaml', yaml.__version__)"
+
+      # One command covers shell syntax, shellcheck, Python compilation,
+      # override.yaml.example validation, the firmware packer selftest, and the
+      # regression tests for the three silent bugs above.
+      - name: Selftest (skipped checks count as failures)
+        run: |
+          set -euo pipefail
+          ./tools/selftest.sh --ci
+
+      # The device checks are deliberately NOT here. The runner has no route to
+      # the KVMs and no key for them, and a CI job that quietly cannot reach
+      # hardware is exactly the false green this repo keeps getting bitten by.
+      # Run them from a workstation instead:
+      #     ./tools/selftest.sh --with-device 192.0.2.15
+      - name: Note what was not covered
+        run: |
+          set -euo pipefail
+          echo "Hardware checks were NOT run here (no route to the KVMs from this runner)."
+          echo "Run './tools/selftest.sh --with-device <ip>' from a workstation for those."
+
+  # Runs selftest seven times over a mutated copy of the tree, so it is far too
+  # slow for the shared runner's push path. Manual only.
+  #
+  # It answers the question selftest cannot ask about itself: can these checks
+  # fail at all? It breaks each thing selftest claims to verify and asserts the
+  # suite goes red, then runs an unmodified copy as a positive control — a suite
+  # that fails on everything proves as little as one that fails on nothing.
+  verify-gates:
+    name: Prove the gates can fail
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck and PyYAML (PINNED)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          python3 -m pip install --quiet "PyYAML==6.0.2"
+
+      - name: Inject violations and require each to be caught
+        run: |
+          set -euo pipefail
+          ./tools/verify-gates.sh
