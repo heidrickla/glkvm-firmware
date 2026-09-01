@@ -1,0 +1,6 @@
+evdev       1.7.1   2.0.0     sdist
+pip         24.2    26.2.1    wheel
+poetry-core 2.4.0   2.4.1     wheel
+setuptools  71.0.3  84.0.0    wheel
+smbus       1.1     1.1.post2 sdist
+spidev      3.6     3.8       sdist
