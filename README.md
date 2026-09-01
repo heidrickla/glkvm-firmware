@@ -135,8 +135,12 @@ tools/
   msd.sh                           virtual media: upload / attach / detach an ISO
   apply-module.sh                  install / revert a patched or ported kvmd module
   panel.sh / panel.py              draw on the front LCD in GL.iNet's own style
+  drift.sh                         read-only diff of a unit against a checkpoint
   checkpoint.sh / restore-...      snapshot + roll back site-packages and /etc/kvmd
+  bake-image.sh (+ .remote.sh)     build a signed image with provisioning inside
+  uncomment-8888.awk               the classic-UI enable, shared by live + bake
   rk_pack.py / rk_sign.py          rebuild and sign a firmware image
+  selftest.sh / verify-gates.sh    the CI checks, and proof they can fail
   rkfw_scan.py                     inspect an RKFW container
   enable_classic_ui.sh             uncomment the :8888 server block
   S99kvmd-vnc / S99kvmd-ipmi       init scripts for the extra daemons

@@ -69,38 +69,12 @@ fi
 # Also repairs a GL.iNet typo: 1.3.0 writes "listen [::]:443 ssl;" INSIDE the
 # 8888 block. Uncommented verbatim that binds a SECOND server to :443
 # alongside the real one. Corrected to 8888, and reported when it fires.
-AWK_PROG='
-function uncomment(s,   i) {
-    i = index(s, "#")
-    if (i == 0) return s
-    return substr(s, 1, i-1) substr(s, i+1)
-}
-/^[[:space:]]*#[[:space:]]*server[[:space:]]*\{/ && !inblk {
-    inblk=1; n=0; hit=0; depth=0
-    L[n++]=$0
-    s=uncomment($0); depth += gsub(/\{/,"{",s) - gsub(/\}/,"}",s)
-    next
-}
-inblk {
-    L[n++]=$0
-    if ($0 ~ /8888/) hit=1
-    s=uncomment($0); depth += gsub(/\{/,"{",s) - gsub(/\}/,"}",s)
-    if (depth <= 0) {
-        for (i=0;i<n;i++) {
-            l=L[i]
-            if (hit) {
-                l=uncomment(l)
-                if (l ~ /listen[[:space:]]+\[::\]:443/) { sub(/443/, "8888", l); fixed++ }
-            }
-            print l
-        }
-        inblk=0
-    }
-    next
-}
-{ print }
-END { if (fixed) print "#   note: listen [::]:443 corrected to 8888 by enable_classic_ui.sh" }
-'
+# The program itself lives in uncomment-8888.awk, shared with the firmware
+# bake so the two cannot drift. Read it here; missing file is a hard error
+# rather than an empty program that silently changes nothing.
+AWK_FILE="$(cd "$(dirname "$0")" && pwd)/uncomment-8888.awk"
+[ -s "$AWK_FILE" ] || { echo "ERROR: $AWK_FILE missing or empty" >&2; exit 1; }
+AWK_PROG=$(cat "$AWK_FILE")
 
 echo ">> target : root@${IP}:${CONF}"
 $SSH true 2>/dev/null || { echo "ERROR: cannot ssh to $IP (key auth only)." >&2; exit 1; }
