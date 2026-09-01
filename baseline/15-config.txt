@@ -1,0 +1,35 @@
+=== does the 8888 block exist here? ===
+67:#                listen 8888 ssl;
+68:#                listen [::]:8888 ssl;
+
+=== which ctx-server is live ===
+51:                listen 80;
+52:                listen [::]:80;
+53:                include /etc/kvmd/nginx/certbot.ctx-server.conf;
+67:#                listen 8888 ssl;
+68:#                listen [::]:8888 ssl;
+71:#                include /etc/kvmd/nginx/kvmd.ctx-server.conf;
+72:#                include /usr/share/kvmd/extras/*/nginx.ctx-server.conf;
+80:                listen 443 ssl;
+81:                listen [::]:443 ssl;
+84:                include /etc/kvmd/nginx/gl.ctx-server.conf;
+85:                include /usr/share/kvmd/extras/*/nginx.ctx-server.conf;
+
+=== front ends present ===
+  /usr/share/kvmd/web          yes (12 entries)
+  /usr/share/kvmd/glweb        yes (4 entries)
+  classic index.html present
+
+=== vnc/ipmi daemons + init scripts ===
+  /usr/bin/kvmd-vnc      present
+  /usr/bin/kvmd-ipmi     present
+  /usr/bin/ipmitool      ABSENT
+  no vnc/ipmi init scripts (as predicted)
+
+=== override wiring ===
+# Don't touch this file otherwise your device may stop working.
+# Use override.yaml to modify required settings.
+# You can find a working configuration in /usr/share/kvmd/configs.default/kvmd.
+
+override: !include [override.d, user/boot.yaml, override.yaml]
+

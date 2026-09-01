@@ -1,32 +1,48 @@
 #!/bin/sh
 #
-# /etc/init.d/S99kvmd-vnc  —  start kvmd's VNC server on the GL-RM1.
+# /etc/init.d/S99kvmd-vnc  —  start kvmd's VNC server on a GL.iNet KVM.
 #
-# The RM1 ships /usr/bin/kvmd-vnc (a Python entry-point wrapper around
-# kvmd.apps.vnc) but NO init script for it, so it never runs. This supplies
-# the missing script, following the house style of /etc/init.d/S98kvmd
-# (start-stop-daemon + logger + pidfile) and the enable-gate style of
-# S99tailscale.
+# The device ships /usr/bin/kvmd-vnc (a Python entry point around
+# kvmd.apps.vnc) but NO init script, so it never runs. This supplies the
+# missing one, in the house style of /etc/init.d/S98kvmd.
 #
 # Install:
-#   scp S99kvmd-vnc root@<unit-ip>:/etc/init.d/
-#   ssh root@<unit-ip> "chmod +x /etc/init.d/S99kvmd-vnc && touch $GATE"
-#   ssh root@<unit-ip> "/etc/init.d/S99kvmd-vnc start"
+#   scp S99kvmd-vnc root@<ip>:/etc/init.d/
+#   ssh root@<ip> "chmod +x /etc/init.d/S99kvmd-vnc #                  && mkdir -p /etc/kvmd/user && touch /etc/kvmd/user/vnc.enable #                  && /etc/init.d/S99kvmd-vnc start"
 #
 # The gate file makes this opt-in: without it the script exits quietly, so a
 # reboot cannot surprise you with an unexpected listener.
 #
-# Remove: rm /etc/init.d/S99kvmd-vnc  (and the gate file)
+# Verified on live hardware 2026-09-01 (GL-RM10, fw 1.8.1, kvmd 4.82).
 
 DAEMON="/usr/bin/kvmd-vnc"
+# --run is REQUIRED: kvmd-vnc refuses to start without it ("to prevent
+# accidental startup"), exactly as S98kvmd passes --run to kvmd.
+# Found by live test — the daemon started and immediately exited without it.
+DAEMON_ARGS="--run"
 PIDFILE="/var/run/kvmd-vnc.pid"
 GATE="/etc/kvmd/user/vnc.enable"
 
+# Matches the daemon's own invocation ONLY.
+#
+# NOT `pgrep -f kvmd-vnc` — that also matches the shell running this very
+# script (its argv contains "S99kvmd-vnc"), so `stop` killed its own
+# caller. Live-tested: it killed the invoking SSH session.
+PATTERN="$DAEMON $DAEMON_ARGS"
+
 . /etc/profile
+
+daemon_pids() {
+    # Exclude this script and its parent so we never kill our own caller.
+    pgrep -f "$PATTERN" 2>/dev/null | while read -r pid; do
+        [ "$pid" = "$$" ] && continue
+        [ "$pid" = "$PPID" ] && continue
+        echo "$pid"
+    done
+}
 
 start() {
     printf "Starting kvmd-vnc: "
-
     if [ ! -f "$GATE" ]; then
         echo "DISABLED (no $GATE)"
         return 0
@@ -35,8 +51,7 @@ start() {
         echo "FAIL ($DAEMON missing)"
         return 1
     fi
-
-    start-stop-daemon --start --quiet --background --make-pidfile         --pidfile "$PIDFILE" --exec /bin/sh --         -c "exec $DAEMON 2>&1 | logger -t kvmd-vnc -p daemon.debug"
+    start-stop-daemon --start --quiet --background --make-pidfile         --pidfile "$PIDFILE" --exec /bin/sh --         -c "exec $DAEMON $DAEMON_ARGS 2>&1 | logger -t kvmd-vnc -p daemon.debug"
     [ $? = 0 ] && echo "OK" || echo "FAIL"
 }
 
@@ -44,17 +59,22 @@ stop() {
     printf "Stopping kvmd-vnc: "
     start-stop-daemon --stop --quiet --pidfile "$PIDFILE" 2>/dev/null || true
     rm -f "$PIDFILE"
-    PIDS=$(pgrep -f '[k]vmd-vnc')
-    [ -n "$PIDS" ] && kill $PIDS 2>/dev/null || true
-    if pgrep -f '[k]vmd-vnc' >/dev/null; then echo "FAIL"; else echo "OK"; fi
+    for pid in $(daemon_pids); do
+        kill "$pid" 2>/dev/null || true
+    done
+    sleep 1
+    if [ -n "$(daemon_pids)" ]; then echo "FAIL"; else echo "OK"; fi
 }
 
 status() {
     printf "kvmd-vnc status: "
-    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-        echo "running (pid: $(cat "$PIDFILE"))"; return 0
+    pids="$(daemon_pids)"
+    if [ -n "$pids" ]; then
+        echo "running (pid:$(echo $pids | tr '
+' ' '))"
+        return 0
     fi
-    [ -f "$GATE" ] && echo "stopped" || echo "disabled"
+    [ -f "$GATE" ] && echo "stopped" || echo "disabled (no gate file)"
     return 3
 }
 

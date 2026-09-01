@@ -1,11 +1,21 @@
-# GL-RM1 (Comet) — what the units are, and how to change them
+# GL-RM10 (Comet Pro) — what the units are, and how to change them
 
 Three units: `192.0.2.13`, `.14`, `.15`. Goal: de-cloud, and be able to modify
 the software.
 
-Everything here was established from GL.iNet's published GPLv3 source, from
-firmware images unpacked locally, and from read-only probes of the units. **No
-change has been made to any device.**
+> **⚠ PRODUCT CORRECTION (2026-09-01).** These units are **GL-RM10 (Comet
+> Pro)**, not GL-RM1. Confirmed on `.15` by `/proc/gl-hw-info/model` = `rm10`
+> and `/etc/os-release` = `rm10rc-1.8.1-release1-6-gfa876ddece`; the user
+> confirms all three are the same model. Most of this document was derived from
+> **RM1** firmware images before shell access existed. The structural findings
+> (Routes 1-4, the override mechanism, the cloud stack) were re-verified on the
+> live RM10 and hold. The hardware specifics did not — see "Corrections".
+>
+> **The three firmware images under `firmware/` are RM1. Do not flash them
+> here.**
+
+Established from GL.iNet's published GPLv3 source, from firmware images
+unpacked locally, and — since 2026-09-01 — from a root shell on `.15`.
 
 Claims are marked:
 
@@ -36,25 +46,27 @@ last resort, not the first.
 
 | | | |
 | --- | --- | --- |
-| SoC | **Rockchip RV1126** | [source] RKAF header `MANUFACTURER: RV1126` |
-| Model string | `rm1` (lowercase) | [measured] `RM1`/`gl-rm1` 404 on the OTA host |
+| Product | **GL-RM10 (Comet Pro)** | [measured] `/proc/gl-hw-info/model` = `rm10` |
+| SoC | **Rockchip RV1126B+, aarch64** | [measured] `RK_BUILD_INFO=rockchip_rv1126bp_gl_rm10`; `uname -m` = aarch64 |
+| Firmware | `rm10rc-1.8.1-release1-6-gfa876ddece` | [measured] `/etc/os-release` |
+| Kernel | Linux 6.1.141 SMP | [measured] `uname -a` |
+| kvmd | **4.82** | [measured] on-device — confirms the fork-point finding |
 | Init | buildroot `/etc/init.d/S<NN><name>` | [measured] from the unpacked rootfs |
 | …but also | OpenWrt's `ubus`, `/etc/glinet/` | [source] `ubus call gl-cloud unbind` |
 | SSH | dropbear 2025.89, port 22 | [measured] banner on all three |
 | Python | 3.12, kvmd in `site-packages` | [source] `apply_to_glkvm.sh` |
-| rootfs | read-only squashfs + **overlay** | [measured] `S22overlayfs` present |
-| Capture bridge | **LT6911C**, i2c-1 addr 0x2b | [source] `upgrade.py:881` |
+| rootfs | squashfs `/rom` ro + overlay rw | [measured] `overlay:/overlay on / ... upperdir=/userdata/overlay/upper` |
+| Capture bridge | **GSV1127X** | [source] `upgrade.py:876` maps `rm10rc` → GSV1127X |
 | HDMI loop-out | LT86102SXE splitter | [source] `main.yaml` pre/post-start cmds |
 | Streamer | `ustreamer` on `/dev/video0` | [source] `main.yaml` |
 
 Not OpenWrt, not plain buildroot — a GL.iNet hybrid. **Do not assume `uci` or
 `opkg` work.**
 
-On the capture bridge: `upgrade.py:876-881` maps `rm10rc`/`rm4pe` → GSV1127X and
-`rmq1` → GSV1127, then falls back to `LT6911C` for anything else. `rm1` is not
-in the map, so the RM1 takes the LT6911C path. (`/etc/kvmd/tc358743-edid.hex`
-also ships, but the TC358743 is upstream PiKVM's bridge — a leftover, not this
-board's hardware.)
+On the capture bridge: `upgrade.py:876-881` maps `rm10rc`/`rm4pe` → GSV1127X,
+`rmq1` → GSV1127, and defaults to LT6911C. The device reports itself as
+`rm10rc`, so **these units take the GSV1127X path** — not the LT6911C that an
+RM1 would use.
 
 ### Partition map [source]
 
@@ -389,6 +401,93 @@ removed entirely). 1.7.0 shipped unstripped libraries and full debug tooling.
 
 Practical consequence: **older firmware is the friendlier reversing target** if
 symbols ever matter.
+
+---
+
+## LIVE TEST — 2026-09-01, on `.15` (GL-RM10, fw 1.8.1)
+
+Root shell obtained after the SSH key was installed via the browser console
+(`POST /api/system/ssh_key`, using the operator's existing session). All routes
+below were **run on the device**, not simulated.
+
+### Route 1 — classic PiKVM UI on :8888 — ✅ WORKS
+
+```
+>> confirming the block actually went live ...
+>> validating nginx config ...
+nginx: configuration file /etc/kvmd/nginx-kvmd.conf test is successful
+>> restarting nginx ... Stopping kvmd-nginx: OK / Starting kvmd-nginx: OK
+```
+
+Verified from another machine:
+
+| URL | Result |
+| --- | --- |
+| `https://192.0.2.15:8888/login/` | **200**, `<title>PiKVM Login</title>` |
+| `https://192.0.2.15:8888/kvm/`, `/vnc/`, `/ipmi/` | 302 → login (exist, auth-gated) |
+| `https://192.0.2.15/` | **200**, unchanged |
+
+The commented 8888 block was present on the RM10 at the same line numbers as in
+the RM1 1.10.0 image, so the transform applied cleanly.
+
+### Route 2 — VNC — ✅ WORKS
+
+`kvmd --dump-config` **exit 0** with our `override.yaml` — this is the
+validation that could not be done off-device, and it passed on the real unit.
+
+```
+kvmd-vnc status: running (pid:2051 2053)
+tcp  :::5900  LISTEN
+kvmd.apps.vnc.server  INFO --- Listening VNC on TCP [::]:5900 ...
+```
+
+RFB handshake from another machine returned `RFB 003.008
+` — a real VNC
+server, not just an open socket.
+
+### De-cloud — already done on this unit
+
+`/etc/glinet/gl-cloud.conf` reads `"enable": false` (with a stale `token` and
+`uuid` from a previous binding), and neither `gl-cloud` nor `rtty` is running.
+Nothing to change. Note `tailscaled` **is** running (100.64.0.62).
+
+### Two bugs in my init script, found only by running it
+
+1. **Missing `--run`.** `kvmd-vnc` refuses to start without it — *"to prevent
+   accidental startup"* — exactly as `S98kvmd` passes `--run` to `kvmd`. The
+   daemon started and instantly exited; `status` said `stopped`.
+2. **`pgrep -f 'kvmd-vnc'` killed its own caller.** The invoking shell's argv
+   contains `S99kvmd-vnc`, so `stop` matched and killed the SSH session running
+   it (exit 255). Now matched on `"$DAEMON $DAEMON_ARGS"` with `$$`/`$PPID`
+   excluded. The same flaw broke `status`, which reported FAIL for a healthy
+   daemon.
+
+Also hit: files edited on Windows picked up **CRLF**, making `#!/bin/sh` an
+invalid interpreter (`cannot execute: required file not found`). All shell
+deliverables are now written with explicit LF.
+
+### Deviations from the RM1-derived expectations
+
+| Expectation (from RM1 images) | Reality on RM10 |
+| --- | --- |
+| `ipmitool` present | **ABSENT** — so Route 2's IPMI half has no on-device client |
+| LT6911C capture bridge | GSV1127X (`rm10rc` is in the cmd_map) |
+| RV1126, armv7 | RV1126B+, **aarch64** |
+
+Everything structural — both front ends present, the commented 8888 block, the
+override wiring, `kvmd-vnc`/`kvmd-ipmi` present with no init scripts — held
+exactly as predicted.
+
+### Current state of `.15`
+
+Left **enabled** (all reversible):
+
+- classic PiKVM UI on 8888 — revert: `./tools/enable_classic_ui.sh 192.0.2.15 --revert`
+- `/etc/kvmd/override.yaml` — revert: `cp /etc/kvmd/override.yaml.orig /etc/kvmd/override.yaml`
+- `/etc/init.d/S99kvmd-vnc` + `/etc/kvmd/user/vnc.enable` — revert: delete both
+- the SSH key in `/root/.ssh/authorized_keys`
+
+Untouched originals are in `baseline/` and in `*.orig` files on the device.
 
 ---
 
