@@ -94,6 +94,14 @@ coded-size limit code is left out because the ablation showed it does
 nothing. With logging in place the failing call is `ProcessOutput()`
 returning `E_FAIL` (0x80004005) on every frame; that is what the PR says.
 
+The PR's second commit is a regression test, `tests/unit/h264decoder.cxx`
+(copy here as `h264decoder-test.cxx`): it decodes an embedded flat-grey
+IDR frame at 1920×1080 and at 2560×1440 through `H264Decoder` into a
+black pixel buffer and checks three pixels. Run against master's decoder
+it fails the 1440p case with every pixel still 0 and passes 1080p; with
+the fix both pass. `0001-upstream-pr-2153-master.patch` holds both
+commits as sent.
+
 ## Verification record
 
 - 2026-09-01, TigerVNC 1.16.2 + patch, MSYS2 MinGW-w64 GCC 16.2, FLTK
