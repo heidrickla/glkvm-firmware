@@ -214,7 +214,18 @@ buttons appear in both UIs.
 ### Redfish automation
 Works today. Slots into Ansible (`community.general.redfish_command`), Zabbix,
 or a Home Assistant switch — power control for the attached host next to
-everything else in the house.
+everything else in the house. Lewis's `ha-glkvm` integration (sibling repo,
+built 2026-09-01) polls the kvmd API directly and stays read-only until he
+says otherwise.
+
+**Fix first: Redfish `PowerState` is wrong on GL firmware.** `glatx.py`
+hard-codes `leds` to false, and Redfish derives PowerState from
+`leds.power`, so it reports Off while `/api/atx` (the board's own reading)
+says on. One-line patch candidate for `patches/kvmd/plugins/atx/glatx.py`:
+set `leds.power` from `power_state`. Needs a red-then-green check against
+the live board — read-only comparison of `/api/atx` and
+`/redfish/v1/Systems/0` — and Lewis at the keyboard for anything that
+presses a button.
 
 ### Grafana dashboard
 Now that Prometheus works, three units on one board is a short job.

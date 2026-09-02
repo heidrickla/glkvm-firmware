@@ -571,6 +571,20 @@ and power-cycle the attached machine. That is the direct consequence of route 5,
 and it is worth deciding on deliberately — either keep the egress/segment
 controls tight, or re-enable auth now that the credential is vaulted and in sync.
 
+**The `PowerState: Off` above is wrong, and the reason is GL.iNet's ATX
+plugin** (read from `plugins/atx/glatx.py` by the ha-management session
+while building `ha-glkvm`; the node and the mismatch verified here
+2026-09-01, nothing fired). A GL.iNet USB ATX board is attached to `.15`:
+`/dev/ttyACM0` exists and `/usr/sbin/atxpower` drives it. `/api/atx`
+reports `enabled: true` only while that node exists, and its `power`
+("on") is the board's own `power_state` reading. But the plugin hard-codes
+the upstream `leds` block to false, and kvmd's Redfish maps
+`leds.power` → `PowerState`, so Redfish says Off while the board says on.
+Anything that fences or automates on Redfish state (Proxmox, Ansible, HA)
+would be misled. Fix candidate, one line in `glatx.py`: derive
+`leds.power` from `power_state`. Power actions reach the attached host —
+Lewis's desktop on `.15` — so they are never fired without him.
+
 ### Route 4 — IPMI — ⚠ REVISED: UNRELIABLE
 
 **The earlier "working" claim does not hold up.** With `pyghmi` installed the
