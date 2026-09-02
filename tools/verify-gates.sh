@@ -93,6 +93,12 @@ expect_fail "provision.sh goes back to discarding apply-module.sh output" \
 expect_fail "override.yaml.example stops stating kvmd.auth.enabled" \
     sed -i '/^    auth:$/,+2d' "$WORK/tools/override.yaml.example"
 
+# A duplicate top-level key silently replaces the first in kvmd's loader; on
+# 2026-09-01 an appended second `kvmd:` block switched auth back on and looked
+# like a firmware change. selftest must refuse the example in that state.
+expect_fail "override.yaml.example gains a second top-level kvmd: block" \
+    sh -c 'printf "\nkvmd:\n    streamer:\n        forever: true\n" >> "$1"' _ "$WORK/tools/override.yaml.example"
+
 echo
 echo "=== positive control: an unmodified copy must still pass ==="
 reset_copy
