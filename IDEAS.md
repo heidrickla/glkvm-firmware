@@ -163,9 +163,11 @@ ustreamer only on its own `need_ustreamer` demand), so as the vendor ships it
 measured on 1.10.0 with HDMI in connected, kvmd's ustreamer runs at 2560×1440
 and 60 fps, `:8888/streamer/snapshot` returns the desktop, janus attaches to
 the h264 memsink, auth stays off, load is unchanged. **Default since
-2026-09-01** — in `override.yaml.example` and the baked image. Still
-unmeasured: the interaction with GL.iNet's adaptive WebRTC path (which the log
-says can *ignore* `need_ustreamer`) while someone is watching in the Vue UI.
+2026-09-01** — in `override.yaml.example` and the baked image. Measured with
+a viewer in the Vue UI's default WebRTC mode: one shared ustreamer, load +0.3.
+The UI's GL WebRTC ("adaptive") mode force-stops kvmd's streamer by design
+(`server.py` masks the `forever` term while adaptive mode is on); entry and
+exit are understood from the source, not yet watched live.
 
 ---
 
@@ -261,13 +263,15 @@ kvmd's **own** OCR endpoint (`/api/streamer/snapshot?ocr=1`) was broken on
 `patches/kvmd/apps/kvmd/ocr.py` (1.10.x only, manifest-scoped, baked): 200
 with the screen's text, given a running streamer.
 
-### HID — proven to reach the host, with one operational lesson
+### ✅ HID — proven end to end, type and read back
 After a gadget rebuild the host had stopped polling the HID endpoints while
 kvmd kept accepting events with 200s; `kvmd-otgconf --reset-gadget` fixed it,
 and kvmd's `online` flag only updates on the next successful write. Keyboard
-and both mouse outputs now deliver. Reading typed text back through OCR needs
-the text to land on the captured (secondary) monitor — Windows keeps Start and
-the pointer on the primary — so that loop waits on a desktop choice.
+and both mouse outputs deliver. The loop is closed: Win+R over the KVM
+keyboard, a marker typed with `POST /api/hid/print` (text in the request
+BODY), and kvmd's OCR restricted to the Run box read it back exactly, on a
+host set to duplicate displays. `ocr.sh read --crop L,T,R,B` does the same
+from the workstation, from kvmd's own streamer frames.
 
 ### ✅ Firmware diff — `tools/firmware-diff.py`
 Compares two kvmd trees at the bytecode level and names what changed in each
