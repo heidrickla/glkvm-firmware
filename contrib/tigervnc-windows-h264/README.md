@@ -84,6 +84,16 @@ A sample comes from the unit with
 The log line `Coded-size limits raised to 4096x2304: width hr=0x00000000
 height hr=0x00000000` confirms the patch is in and the MFT accepted it.
 
+## Upstream
+
+Sent as [TigerVNC/tigervnc#2153](https://github.com/TigerVNC/tigervnc/pull/2153)
+from `heidrickla/tigervnc`, branch `h264-win-decoded-buffer`, rebased on
+master (commit `0b1501c`). The upstream version is smaller than the diff
+here: master had already fixed the MinGW `closesocket` clash, and the
+coded-size limit code is left out because the ablation showed it does
+nothing. With logging in place the failing call is `ProcessOutput()`
+returning `E_FAIL` (0x80004005) on every frame; that is what the PR says.
+
 ## Verification record
 
 - 2026-09-01, TigerVNC 1.16.2 + patch, MSYS2 MinGW-w64 GCC 16.2, FLTK

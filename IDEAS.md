@@ -301,7 +301,7 @@ more than frame rate.
 decoded-frame buffer from a placeholder output type (1920×1088) and never
 grew it. `contrib/tigervnc-windows-h264/` has the patch and
 `tools/build-tigervnc-h264.sh` the build; the patched viewer renders the
-unit's 1440p stream live. Worth sending upstream with the replay evidence.
+unit's 1440p stream live. Upstream: TigerVNC/tigervnc#2153.
 Open, server side: the JPEG path costs ~0.4 MB/frame — a scaled or
 region-diffed JPEG would suit slow links.
 
