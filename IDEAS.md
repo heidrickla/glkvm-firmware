@@ -166,8 +166,9 @@ the h264 memsink, auth stays off, load is unchanged. **Default since
 2026-09-01** — in `override.yaml.example` and the baked image. Measured with
 a viewer in the Vue UI's default WebRTC mode: one shared ustreamer, load +0.3.
 The UI's GL WebRTC ("adaptive") mode force-stops kvmd's streamer by design
-(`server.py` masks the `forever` term while adaptive mode is on); entry and
-exit are understood from the source, not yet watched live.
+(`server.py` masks the `forever` term while adaptive mode is on) and brings it
+back 0.3 s after exit — watched live through every Mode the UI offers. Nothing
+left to measure here.
 
 ---
 
