@@ -277,6 +277,23 @@ kvmd's **own** OCR endpoint (`/api/streamer/snapshot?ocr=1`) was broken on
 `patches/kvmd/apps/kvmd/ocr.py` (1.10.x only, manifest-scoped, baked): 200
 with the screen's text, given a running streamer.
 
+### ✅ VNC with a picture — H.264 for TigerVNC, JPEG for the rest
+As shipped, kvmd-vnc on 1.10.0 shows black to every client: the JPEG
+memsink is never written, `/stream` is raw H.264, and TigerVNC's Auto select
+made kvmd-vnc restart ustreamer once a second. Two patched modules under
+`patches/kvmd/apps/vnc/` fix it (details in FINDINGS). Port 5900, video
+format H.264 in the UI. TightVNC and friends get full-frame JPEG from
+ustreamer's snapshot path at any resolution. TigerVNC on Windows decodes
+the H.264 only up to 1080p — measured by replaying the unit's stream and
+transcodes to it — so with a 1440p host it stays black.
+
+Open, client side: TigerVNC's `H264WinDecoderContext.cxx` never raises
+`CODECAPI_AVDecVideoMaxCodedWidth/Height` on the Media Foundation decoder
+and ignores every decoder error. A patched Windows build (or an upstream
+issue with the replay evidence) would give H.264 VNC at 1440p. Open, server
+side: the JPEG path costs ~0.4 MB/frame — a scaled or region-diffed JPEG
+would suit slow links.
+
 ### ✅ HID — proven end to end, type and read back
 After a gadget rebuild the host had stopped polling the HID endpoints while
 kvmd kept accepting events with 200s; `kvmd-otgconf --reset-gadget` fixed it,

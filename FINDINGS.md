@@ -1490,6 +1490,68 @@ second) and only falls back to the transient path when that socket is absent
 returned the GL UI's own status line, `WebRTC H.264 - 2560x1440 / 1765 kbps /
 60 fps dynamic`.
 
+### VNC: a black screen for every client, and what it took to fix
+
+Lewis connected TightVNC to `:5900` and got a black screen; TigerVNC too.
+Measured on `.15` with a minimal RFB client (`security None` is offered
+because kvmd auth is off; `VeNCrypt` is the other type):
+
+| client | kvmd-vnc path | what happened |
+| --- | --- | --- |
+| TightVNC (Tight, no H.264) | `MemsinkStreamerClient(JPEG)` | waits forever: GL.iNet's ustreamer **never writes the JPEG memsink** (its mtime never moves, `ustreamer-dump` gets 0 bytes) — the RV1126 pipeline emits H.264/H.265 only |
+| any client, fallback | `HttpStreamerClient(JPEG)` on `/stream` | useless: GL.iNet's `/stream` is a raw H.264 elementary stream, not MJPEG |
+| TigerVNC ≥ 1.13 (Open H.264, RFB encoding 50) | `MemsinkStreamerClient(H264)` | `Invalid sink format` whenever the UI's video format is **H.265** (sink frames tagged `HEVC`, VPS/SPS/PPS NALs confirmed); with H.264 selected the sink is tagged `H264` and real Open H.264 rects flow |
+| TigerVNC with its default *Auto select* | H.264 | still black: it re-sends SetEncodings every second with the JPEG quality flipping 70 ↔ 90, kvmd-vnc re-applied streamer params each time, and on this firmware **any quality change restarts ustreamer** (only `h264_bitrate` is applied live). Eight restarts in eleven seconds; every WebRTC viewer blinked along |
+
+Two patches, both provenance-checked (the device's bytecode compiles from
+the vendor source with zero semantic differences), manifest-scoped
+`rm10-1.10.*`, asserted by the bake:
+
+- **`patches/kvmd/apps/vnc/__init__.py`** adds `SnapshotStreamerClient`:
+  JPEG frames by polling ustreamer's `/snapshot` over its unix socket, which
+  returns a hardware JPEG (`X-UStreamer-Snapshot-Method: rv1126-direct`) in
+  ~16 ms at 2560×1440 with the width/height/online headers the VNC code
+  expects; paced at `vnc.desired_fps`. It replaces both dead JPEG paths and
+  is the fallback when the H.264 memsink refuses an H.265 sink. TightVNC
+  shows a picture (Lewis confirmed); ~0.4 MB per frame, so lower
+  `vnc.desired_fps` on slow links.
+- **`patches/kvmd/apps/vnc/server.py`** applies streamer params **once per
+  connection** and pushes no JPEG quality for a client that will take H.264.
+  Measured with a churn probe (8 quality flips in 8 s): vendor code 8
+  ustreamer restarts, 126 H.264 rects, 0 stable key resets; patched 0
+  restarts, 471 rects, 1 key reset — a stable stream.
+
+**Then TigerVNC was still black — and that one is the client.** With the
+churn fixed, kvmd-vnc's log for a TigerVNC 1.16.2 session shows the H.264
+memsink, "Streaming", continuous updates on, no restarts; TigerVNC's own
+overlay counted 62 updates/s arriving. To separate server from client, a
+local RFB server (`rfb-h264-server.py`, scratch) replayed captured streams
+to TigerVNC as Open H.264 rects framed exactly as kvmd-vnc frames them:
+
+| replayed stream | TigerVNC 1.16.2 on Windows 11 |
+| --- | --- |
+| the unit's own 2560×1440 High 5.0 (SPS ordinary: 4:2:0, frame-only, no cropping, 60 fps VUI) | **black** |
+| same content transcoded 2560×1440 Main 5.0 (x264) | **black** |
+| same content transcoded 1920×1080 High 4.1 (x264) | **picture** |
+
+So TigerVNC's Windows decoder (Media Foundation `CLSID_CMSH264DecoderMFT`
+via `H264WinDecoderContext.cxx`, which leaves the MFT at its defaults and
+swallows every error silently) does not produce frames above 1080p, whatever
+the profile. Microsoft's decoder is documented to 4096×2304, so the limit is
+TigerVNC's use of it — most likely the unset
+`CODECAPI_AVDecVideoMaxCodedWidth/Height` — and a client-side fix. Linux
+TigerVNC uses FFmpeg and has no such limit (not measured here).
+
+Facts for users: port **5900**; H.264 needs the video format set to H.264
+in the UI (the H.265 radio makes the sink HEVC, which no VNC client can
+carry — kvmd-vnc then falls back to JPEG); TigerVNC ≥ 1.13 is the only
+mainstream viewer with Open H.264 (PiKVM's own docs say the same, Windows
+binaries included), and on Windows it decodes this unit's stream only when
+the attached host outputs ≤ 1080p; TightVNC and friends get JPEG at any
+resolution; the VNC `quality` a client requests changes ustreamer's global
+JPEG quality, so a first VNC connect after boot restarts the streamer once
+(80 → 70).
+
 ### The credential leak in that diff
 
 The first run of the diff tool printed `/etc/kvmd/ipmipasswd` — which maps
