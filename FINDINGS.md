@@ -1587,8 +1587,17 @@ Lewis offered an 8K-capable monitor for tests. Measured instead of assumed:
 
   `default` put the factory EDID back; the host renegotiated 2560×1440 @ 60
   within 30 s. Not measured: 4K over the Vue UI's WebRTC (no browser at
-  hand), and whether `h264_bitrate` should scale with resolution — 2 Mbps
-  at 4K30 is thin.
+  hand).
+
+- **`h264_bitrate` is a cap, applied live.** At 1440p60 on a static
+  desktop: `POST /api/streamer/set_params?h264_bitrate=6000` and `=12000`
+  took effect without a streamer restart (`Successfully set encoder bitrate`
+  in the log, restart count unchanged), yet the sink carried 1.65 → 1.90 →
+  1.85 Mbit/s — the RV1126 rate control (`enRcMode: 2`) spends nothing on
+  a still picture. The cap only bites under motion, so raising it costs
+  nothing at idle and buys quality when the screen moves; restored to 2000.
+  Whether to raise the default is a bandwidth decision (it also governs what
+  the Vue UI's WebRTC sends).
 - **How a switch is applied:** `POST /api/upgrade/edid` writes the hex to
   `/tmp/edid.bin` and the user file, then runs a per-model command. The map
   knows `rm10rc`, `rm4pe` and `rmq1`; this unit's model string is `rm10`, so
