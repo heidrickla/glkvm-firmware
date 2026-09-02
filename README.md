@@ -157,7 +157,6 @@ tools/
   uncomment-8888.awk               the classic-UI enable, shared by live + bake
   rk_pack.py / rk_sign.py          rebuild and sign a firmware image
   selftest.sh / verify-gates.sh    the CI checks, and proof they can fail
-docs/        firmware-diff-1.8.1-to-1.10.0.md — the measured delta (credentials redacted)
   rkfw_scan.py                     inspect an RKFW container
   enable_classic_ui.sh             uncomment the :8888 server block
   S99kvmd-vnc / S99kvmd-ipmi       init scripts for the extra daemons
@@ -165,7 +164,11 @@ docs/        firmware-diff-1.8.1-to-1.10.0.md — the measured delta (credential
   apply_to_glkvm_safe.sh           cherry-pick upstream kvmd changes
   override.yaml.example            the config we apply
 patches/     modified kvmd modules, mirroring the site-packages tree; each
-             file carries a banner saying what it changes and why
+             file carries a banner saying what it changes and why; MANIFEST
+             scopes each one to the firmware it applies to
+contrib/     tigervnc-windows-h264/ — the TigerVNC decoder fix sent upstream as
+             TigerVNC/tigervnc#2153, its regression test, and the build notes
+docs/        firmware-diff-1.8.1-to-1.10.0.md — the measured delta (credentials redacted)
 baseline/    pre-change state captured from .15
 backups/     kvmd trees pulled off devices
 checkpoints/ restorable snapshots (gitignored)
