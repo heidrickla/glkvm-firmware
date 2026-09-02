@@ -1505,7 +1505,12 @@ because kvmd auth is off; `VeNCrypt` is the other type):
 
 Two patches, both provenance-checked (the device's bytecode compiles from
 the vendor source with zero semantic differences), manifest-scoped
-`rm10-1.10.*`, asserted by the bake:
+`rm10-1.10.*`, asserted by the bake, and covered by three regression
+checks in `selftest.sh --with-device <ip>` (a real Tight JPEG frame on the
+JPEG path, Open H.264 rects on the H.264 path, zero ustreamer restarts
+across four quality flips). Proven red: with both modules reverted to the
+vendor bytecode the JPEG check and the churn check fail (3 restarts in 4
+flips) and drift flags the modules; re-applied, all green.
 
 - **`patches/kvmd/apps/vnc/__init__.py`** adds `SnapshotStreamerClient`:
   JPEG frames by polling ustreamer's `/snapshot` over its unix socket, which

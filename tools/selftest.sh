@@ -333,6 +333,42 @@ else
             sed 's/^/          /' /tmp/.st_drift | head -20
         fi
         rm -f /tmp/.st_drift
+
+        # VNC regressions for the two patched kvmd-vnc modules. Vendor 1.10.0
+        # gave every client a black screen (JPEG sink never written, H.264
+        # rejected when the sink is HEVC) and restarted ustreamer on every
+        # TigerVNC re-negotiation. Each check below was red on the vendor
+        # code and is green with patches/kvmd/apps/vnc/. They need a live
+        # HDMI signal and the streamer in H.264 mode.
+        if command -v "$PY" >/dev/null 2>&1; then
+            _ssh() { ssh -n -i "$ROOT/.ssh-glkvm/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes \
+                         -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "root@$DEVICE" "$@" 2>/dev/null; }
+            _probe=$("$PY" "$HERE/vnc-probe.py" "$DEVICE" 5900 7,-26,-223,0 2>&1 | grep -E '^update' | head -3)
+            _jpeg=$(printf '%s\n' "$_probe" | grep -oE 'TightJPEG +bytes=[0-9]+' | grep -oE '[0-9]+$' | sort -n | tail -1)
+            if [ -n "$_jpeg" ] && [ "$_jpeg" -gt 20000 ]; then
+                pass "kvmd-vnc JPEG path: Tight JPEG frame of $_jpeg bytes (a 9.5 KB frame would be the 'Waiting for stream' placeholder)"
+            else
+                fail "kvmd-vnc JPEG path: no real Tight JPEG frame - SnapshotStreamerClient missing or no HDMI signal"
+                printf '%s\n' "$_probe" | sed 's/^/          /'
+            fi
+            _probe=$("$PY" "$HERE/vnc-probe.py" "$DEVICE" 5900 50,7,-26,-223,0 2>&1 | grep -E '^update' | head -3)
+            if printf '%s\n' "$_probe" | grep -q 'H264 '; then
+                pass "kvmd-vnc H.264 path: Open H.264 rects delivered"
+            else
+                fail "kvmd-vnc H.264 path: no H.264 rect - streamer in H.265 mode, or the H.264 memsink is not feeding"
+                printf '%s\n' "$_probe" | sed 's/^/          /'
+            fi
+            _before=$(_ssh 'grep -c "Started streamer" /var/log/kvmd.log')
+            "$PY" "$HERE/vnc-churn.py" "$DEVICE" 5900 4 >/dev/null 2>&1
+            _after=$(_ssh 'grep -c "Started streamer" /var/log/kvmd.log')
+            if [ -n "$_before" ] && [ -n "$_after" ] && [ "$_after" -eq "$_before" ]; then
+                pass "kvmd-vnc re-negotiation churn: 4 quality flips, 0 ustreamer restarts (vendor: 1 per flip)"
+            else
+                fail "kvmd-vnc re-negotiation churn restarted ustreamer $((${_after:-0} - ${_before:-0})) times in 4 flips"
+            fi
+        else
+            skip "no python interpreter - the VNC regressions were NOT run"
+        fi
     else
         fail "cannot ssh to $DEVICE (asked for --with-device, so this is a failure, not a skip)"
     fi
