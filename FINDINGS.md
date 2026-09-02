@@ -581,9 +581,15 @@ reports `enabled: true` only while that node exists, and its `power`
 the upstream `leds` block to false, and kvmd's Redfish maps
 `leds.power` → `PowerState`, so Redfish says Off while the board says on.
 Anything that fences or automates on Redfish state (Proxmox, Ansible, HA)
-would be misled. Fix candidate, one line in `glatx.py`: derive
-`leds.power` from `power_state`. Power actions reach the attached host —
-Lewis's desktop on `.15` — so they are never fired without him.
+would be misled. **Fixed 2026-09-02:** `patches/kvmd/plugins/atx/glatx.py`
+derives `leds.power` from `power_state` (one expression; provenance clean;
+manifest-scoped `rm10-1.10.*`; the bake asserts the comparison is in the
+compiled `get_state`). Regression check in `selftest.sh --with-device`:
+Redfish `PowerState` must agree with `/api/atx`'s `power`. Watched red on
+the vendor module (`PowerState=Off` while the board says on), green after
+`apply-module.sh` + kvmd restart (`leds.power: true`, `PowerState: On`);
+checkpoint `redfish-powerstate`. Power actions reach the attached host —
+Lewis's desktop on `.15` — so they are still never fired without him.
 
 ### Route 4 — IPMI — ⚠ REVISED: UNRELIABLE
 

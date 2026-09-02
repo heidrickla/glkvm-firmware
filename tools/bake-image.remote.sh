@@ -214,6 +214,20 @@ h = next(c for c in walk(code) if c.co_name == "_on_set_encodings")
 assert "_Client__streamer_params_applied" in h.co_names, "patched vnc/server.pyc does not gate set_params - wrong source?"
 PY
             ;;
+        kvmd/plugins/atx/glatx.py)
+            # The whole point of that patch: leds.power follows the board's reading.
+            python3 - "$PYC" <<'PY'
+import marshal, sys, types
+code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
+def walk(c):
+    yield c
+    for k in c.co_consts:
+        if isinstance(k, types.CodeType):
+            yield from walk(k)
+g = next(c for c in walk(code) if c.co_name == "get_state")
+assert "on" in g.co_consts, "patched glatx.pyc never compares power_state to 'on' - wrong source?"
+PY
+            ;;
     esac
     ok "$rel installed; vendor kept as .pyc.orig"
     applied=$((applied + 1))
