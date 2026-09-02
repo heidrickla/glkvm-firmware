@@ -17,8 +17,11 @@
 #   here is persistent beyond the unit's own user file; `default` puts the
 #   factory EDID back and waits the same way.
 #
-# The capture path tops out at 2560x1440 (v4l2 says so), so a 4K EDID is a
-# test of the bridge's scaling and of the host's behaviour, not a 4K stream.
+# Measured 2026-09-01: with E3840x2160 the host output 3840x2160@30, the
+# capture and the H.264 encoder followed (High 5.1, still 2000 kbps unless
+# you raise h264_bitrate), kvmd-vnc streamed it and the patched TigerVNC
+# decoded it. v4l2's format list only ever shows the CURRENT input mode as
+# its maximum, so do not read a ceiling off it.
 
 set -eu
 
@@ -57,14 +60,25 @@ except Exception as ex:
 }
 
 wait_signal() {
-    # after a bridge reset the host re-plugs; give it up to 60 s to come back
-    n=0
-    while [ $n -lt 30 ]; do
+    # After a bridge reset the host re-plugs. The streamer's `online` flag is
+    # STALE across that (measured: "online 2560x1440 fps=196" with
+    # hdmi.signal=False two seconds after the switch), so wait for
+    # hdmi.signal=True and the same resolution on two consecutive reads.
+    n=0; prev=""
+    while [ $n -lt 45 ]; do
         sleep 2; n=$((n+1))
         st=$(state)
-        case "$st" in online*) echo "  source: $st  (after $((n*2)) s)"; return 0;; esac
+        case "$st" in
+            *"'signal': True"*)
+                res=$(printf '%s' "$st" | awk '{print $2}')
+                if [ -n "$prev" ] && [ "$res" = "$prev" ]; then
+                    echo "  source: $st  (after $((n*2)) s)"; return 0
+                fi
+                prev="$res" ;;
+            *) prev="" ;;
+        esac
     done
-    echo "  source still offline after 60 s: $st" >&2
+    echo "  no stable signal after 90 s: $st" >&2
     return 1
 }
 

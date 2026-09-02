@@ -1558,9 +1558,11 @@ memsink and zero ustreamer restarts; the installed copy in
 
 Lewis offered an 8K-capable monitor for tests. Measured instead of assumed:
 
-- **The capture path tops out at 2560×1440.** `v4l2-ctl --list-formats-ext`
-  on `/dev/video0` enumerates every format as `Stepwise 64x64 - 2560x1440`.
-  No EDID changes that; nothing above 1440p can ever leave the unit.
+- **v4l2 does not tell you the ceiling.** `v4l2-ctl --list-formats-ext` on
+  `/dev/video0` enumerated every format as `Stepwise 64x64 - 2560x1440`
+  while the host output 1440p — and `… - 3840x2160` once it output 4K. The
+  listed maximum is the *current* input mode. An earlier line here read a
+  1440p ceiling off it; wrong, and corrected by the test below.
 - **The EDID the unit presents** (`/etc/kvmd/user/edid.txt`, 256 bytes, one
   CEA block) has 2560×1440 @ 60 as its preferred timing, standard timings
   down from 1920×1080, and CEA VICs 16/31/… — nothing above 1080p there.
@@ -1568,9 +1570,25 @@ Lewis offered an 8K-capable monitor for tests. Measured instead of assumed:
   which is why the host sits at 1440p60.
 - **GL.iNet ships 14 EDID presets** in `/etc/kvmd/edid.json`, including
   `E3840x2160` "3840x2160/GLKVM/30Hz", 3440×1440/50, 2560×1600/50 and a
-  120 Hz 1080p. So the LT6911C-class bridge accepts 4K30 input and the
-  pipeline scales it to ≤ 1440p; the preset is a test of that scaling and
-  of the host's behaviour, never a 4K stream.
+  120 Hz 1080p.
+- **4K30 works end to end** (Lewis away, displays extended, dead-man revert
+  armed on the unit). `tools/edid.sh 192.0.2.15 set E3840x2160`: the host
+  re-plugged and output **3840×2160 @ 30**, ustreamer logged `resolution:
+  change to 3840x2160@30, reinit vi venc`, and then:
+
+  | | at 4K30 |
+  | --- | --- |
+  | capture | 3840×2160, 30 fps, NV12 |
+  | encoder | RV1126-H264, High profile **level 5.1**, still `h264_bitrate` 2000 kbps (so quality per pixel drops unless it is raised) |
+  | snapshot | 3840×2160 JPEG, 170 KB of a mostly-empty desktop, **59 ms** |
+  | kvmd-vnc | resize to 3840×2160, Open H.264 rects (45 KB key frame on a static screen), Tight JPEG frames of 170 KB on the snapshot path |
+  | patched TigerVNC | decoded it: `Stream change: decoder output 3840x2160`, decoded-frame buffer grown to 16,588,800 bytes, picture on screen |
+  | load | unchanged at ~9.5 |
+
+  `default` put the factory EDID back; the host renegotiated 2560×1440 @ 60
+  within 30 s. Not measured: 4K over the Vue UI's WebRTC (no browser at
+  hand), and whether `h264_bitrate` should scale with resolution — 2 Mbps
+  at 4K30 is thin.
 - **How a switch is applied:** `POST /api/upgrade/edid` writes the hex to
   `/tmp/edid.bin` and the user file, then runs a per-model command. The map
   knows `rm10rc`, `rm4pe` and `rmq1`; this unit's model string is `rm10`, so
@@ -1581,9 +1599,10 @@ Lewis offered an 8K-capable monitor for tests. Measured instead of assumed:
   The host sees a hot-plug and renegotiates from the new EDID, so with a
   duplicated desktop the operator's own screen changes mode too.
 - `tools/edid.sh <ip> list|get|set <key>|default` wraps all of that and
-  waits for the streamer's source to come back after the re-plug. Verified
-  read-only on `.15`; the 4K30 `set` waits for Lewis's go, since it flips
-  his working display.
+  waits for `hdmi.signal` plus a stable resolution after the re-plug — the
+  streamer's `online` flag is stale across a re-plug (it read "online
+  2560x1440 fps=196" with no signal two seconds after the switch), which the
+  first version of the tool trusted.
 
 A lever not pulled: GL.iNet's ustreamer takes `--venc-format 0:h264 1:h265
 2:mjpeg`, so the RV1126 encoder *can* emit hardware MJPEG — that would feed
