@@ -58,7 +58,10 @@ unit). It enables:
 - **Classic PiKVM UI** on `:8888` — GL.iNet ships it installed but commented out
   in nginx. The Vue UI is untouched on `:443`.
 - **`/etc/kvmd/override.yaml`** — validated with `kvmd --dump-config` before it
-  is kept; auto-restores the original if validation fails.
+  is kept; auto-restores the original if validation fails. It carries
+  `kvmd.streamer.forever: true`, so kvmd's own streamer runs permanently and
+  the classic UI, `/api/streamer/snapshot` and kvmd's OCR endpoint have a
+  picture (vendor firmware never starts it).
 - **VNC** on `:5900`, autostarting across reboots.
 - **Patched kvmd modules** — everything under `patches/`, then one kvmd restart
   for the whole batch.

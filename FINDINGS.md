@@ -1359,11 +1359,11 @@ the existing `kvmd:` block* of `override.yaml`:
 | auth | stayed off; load average unchanged (~10.6, GL.iNet's pipeline dominates either way) |
 
 So `forever: true` gives the classic UI its video, kvmd snapshots, and kvmd's
-own OCR endpoint on 1.10.0. It was **reverted** after the test: whether kvmd's
-ustreamer should run permanently alongside GL.iNet's adaptive WebRTC pipeline
-(which the log says can "ignore" `need_ustreamer` in adaptive mode) is a call
-for Lewis, and the host needs to output video before the picture itself can be
-verified. The default in `override.yaml.example` is unchanged.
+own OCR endpoint on 1.10.0. It was reverted after this first test pending
+Lewis's call — whether kvmd's ustreamer should run permanently alongside
+GL.iNet's adaptive WebRTC pipeline (which the log says can "ignore"
+`need_ustreamer` in adaptive mode) — and re-measured with HDMI in connected
+(next section). **Decided 2026-09-01: it is the default.**
 
 **A trap found on the way.** The first attempt appended a *second* top-level
 `kvmd:` block to `override.yaml`. PyYAML keeps the last duplicate key, so the
@@ -1383,10 +1383,12 @@ The attached host is a Windows 11 workstation whose **secondary** monitor feeds
 **`kvmd.streamer.forever: true`** (inside the `kvmd:` block): kvmd's ustreamer
 runs at 2560×1440, 60 captured fps; `:8888/streamer/snapshot` returns a 138 KB
 JPEG of the desktop — the classic UI has its picture; janus attaches to the
-h264 memsink; `gl_kvm_gui` and janus stay up; load ~9.3. It is **left on the
-unit for Lewis's acceptance tests and is not in `override.yaml.example`** — so
-`provision.sh` will refuse to overwrite until that is decided (`--force`, or
-add the line to the example).
+h264 memsink; `gl_kvm_gui` and janus stay up; load ~9.3. **Default since
+2026-09-01** (Lewis: "leave streamer.forever: true as the default"):
+`override.yaml.example` carries it inside the `kvmd:` block, the bake asserts
+it is in the baked file, and `.15` was re-provisioned from the example. Still
+unmeasured: the interaction with GL.iNet's adaptive WebRTC path while someone
+is watching in the Vue UI.
 
 **kvmd's own OCR endpoint had a vendor bug.** `GET /api/streamer/snapshot?ocr=1`
 returned 500: `TypeError: 'generator' object does not support the context

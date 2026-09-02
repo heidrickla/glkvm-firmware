@@ -169,6 +169,21 @@ kvmd:
     auth:
         enabled: false
 
+    # kvmd's own streamer, permanently. Neither firmware ever starts it:
+    # GL.iNet's manager launches ustreamer only on its own `need_ustreamer`
+    # demand (the Vue UI / WebRTC path), so without this the classic UI on
+    # :8888 has controls and no picture, /api/streamer/snapshot is always 503,
+    # and kvmd's OCR endpoint has nothing to read. Measured on 1.10.0,
+    # 2026-09-01, with HDMI in connected: 2560x1440 at 60 fps, janus attaches
+    # to the h264 memsink, gl_kvm_gui stays up, load unchanged. Default since
+    # 2026-09-01 (Lewis: "leave streamer.forever: true as the default").
+    #
+    # This key MUST live inside this one kvmd: block. A second top-level
+    # `kvmd:` block silently REPLACES the first (PyYAML keeps the last
+    # duplicate) -- auth came back on that way once. selftest.sh guards it.
+    streamer:
+        forever: true
+
     # MSD storage must stay READ-WRITE. Measured on 1.10.0, 2026-09-01:
     #
     # Upstream kvmd keeps the media partition RO and remounts RW around every

@@ -187,7 +187,13 @@ assert not missing, "missing top-level keys: %s" % missing
 # nobody flips the security posture of every provisioned unit by accident.
 auth = (d.get("kvmd") or {}).get("auth", {})
 assert "enabled" in auth, "kvmd.auth.enabled is not stated explicitly"
-print("auth.enabled=%s" % auth["enabled"])
+# kvmd's own streamer never starts on vendor firmware (GL.iNet's manager only
+# raises it on demand), so without this line the classic UI has no picture,
+# /api/streamer/snapshot is 503 and kvmd's OCR endpoint has nothing to read.
+# Default since 2026-09-01 (Lewis). It must live INSIDE the one kvmd: block.
+streamer = (d.get("kvmd") or {}).get("streamer", {})
+assert streamer.get("forever") is True, "kvmd.streamer.forever is not true"
+print("auth.enabled=%s streamer.forever=%s" % (auth["enabled"], streamer["forever"]))
 PY
         ) && _rc=0 || _rc=$?
         if [ "$_rc" -eq 0 ]; then pass "valid YAML, required keys present ($_out)"

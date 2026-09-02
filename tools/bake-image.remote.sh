@@ -107,6 +107,10 @@ chmod 644 "$OV"
 cmp -s "$OV" "$IN/override.yaml" || die "override.yaml differs from staged input"
 grep -qE '^[[:space:]]+enabled:[[:space:]]+false' "$OV" \
     || die "override.yaml has no 'enabled: false' - the passwordless posture is missing"
+grep -qE '^[[:space:]]+forever:[[:space:]]+true' "$OV" \
+    || die "override.yaml has no 'forever: true' - kvmd's streamer would never start (default since 2026-09-01)"
+[ "$(grep -c '^kvmd:' "$OV")" = 1 ] \
+    || die "override.yaml must have exactly one top-level kvmd: block (a second one silently replaces the first)"
 ok "installed; vendor kept as .orig"
 
 # ---------------------------------------------------------------- 4. VNC autostart

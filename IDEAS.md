@@ -153,19 +153,19 @@ worth doing if something in the estate speaks SNMP and nothing else.
 
 ### The classic UI's own extras
 Live on `:8888`: macros, paste-to-target, keyboard shortcuts, health panel.
-**But no picture as shipped** — see the next item.
+**But no picture on vendor firmware** — see the next item.
 
-### Classic UI video, kvmd snapshots and kvmd's own OCR endpoint — one line, Lewis's call
-kvmd's streamer never runs on either firmware (GL.iNet's manager starts
-ustreamer only on its own `need_ustreamer` demand), so `:8888` has controls
-and no video, and `/api/streamer/snapshot` is always 503. Measured on 1.10.0:
-`kvmd.streamer.forever: true` (inside the `kvmd:` block) starts kvmd's
-ustreamer, `:8888/streamer/state` goes 200 at 1920×1080, janus attaches to the
-h264 memsink, auth stays off, load is unchanged. The picture itself is
-unverified until the attached host outputs video, and the interaction with
-GL.iNet's adaptive WebRTC path (which the log says can *ignore*
-`need_ustreamer`) while someone is watching in the Vue UI is unknown. Reverted
-after the test; the default is unchanged. To try it: add the line, `provision.sh`.
+### Classic UI video, kvmd snapshots and kvmd's own OCR endpoint — shipped as the default
+kvmd's streamer never runs on either vendor firmware (GL.iNet's manager starts
+ustreamer only on its own `need_ustreamer` demand), so as the vendor ships it
+`:8888` has controls and no video, and `/api/streamer/snapshot` is always 503.
+`kvmd.streamer.forever: true` (inside the `kvmd:` block) fixes all three:
+measured on 1.10.0 with HDMI in connected, kvmd's ustreamer runs at 2560×1440
+and 60 fps, `:8888/streamer/snapshot` returns the desktop, janus attaches to
+the h264 memsink, auth stays off, load is unchanged. **Default since
+2026-09-01** — in `override.yaml.example` and the baked image. Still
+unmeasured: the interaction with GL.iNet's adaptive WebRTC path (which the log
+says can *ignore* `need_ustreamer`) while someone is watching in the Vue UI.
 
 ---
 
