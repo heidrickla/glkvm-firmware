@@ -20,10 +20,12 @@
 #   * /etc/glkvm-bake.txt recording what was baked, from which git revision
 #   * the .orig backups deprovision.sh and apply-module.sh --revert expect
 #
-# Why only export.py of the three patches: the other two exist to register the
-# health submanager on firmware 1.8.1, and 1.10.0 already registers it (proved
-# by disassembling its info/__init__.pyc, not by reading the source tree). The
-# fan bug in export.py is present on both.
+# Which patches go in is decided by patches/MANIFEST against the image's own
+# /etc/os-release on the VM: the two health patches are 1.8.1-only (1.10.0
+# registers health itself, proved by disassembling its info/__init__.pyc), the
+# export.py fan fix applies everywhere, and the ocr.py contextmanager fix is
+# 1.10.x-only. Until this was manifest-driven only export.py was baked, so a
+# re-flash would have silently dropped the OCR fix.
 #
 # HOW THE WORK IS SPLIT: mksquashfs exists on neither Windows nor the KVM, so
 # the rootfs is rebuilt on the build VM. rk_pack.py and rk_sign.py are pure
@@ -133,7 +135,17 @@ trap 'rm -rf "$STAGE"' EXIT INT TERM
 tr -d '\r' < "$HERE/uncomment-8888.awk"    > "$STAGE/in/uncomment-8888.awk"
 tr -d '\r' < "$HERE/override.yaml.example" > "$STAGE/in/override.yaml"
 tr -d '\r' < "$HERE/S99kvmd-vnc"           > "$STAGE/in/S99kvmd-vnc"
-tr -d '\r' < "$PATCH"                      > "$STAGE/in/export.py"
+# Every patch, plus the manifest. The remote side decides which apply to the
+# image's own firmware (it has the rootfs, so it has /etc/os-release); this
+# side does not guess. Until this change only export.py was baked, so the
+# 1.10.0-only ocr.py fix would not have survived a re-flash.
+mkdir -p "$STAGE/in/patches"
+( cd "$ROOT/patches" && find . -name '*.py' -type f ) | while IFS= read -r rel; do
+    mkdir -p "$STAGE/in/patches/$(dirname "$rel")"
+    tr -d '\r' < "$ROOT/patches/$rel" > "$STAGE/in/patches/$rel"
+done
+tr -d '\r' < "$ROOT/patches/MANIFEST"      > "$STAGE/in/patches/MANIFEST"
+[ -s "$STAGE/in/patches/kvmd/apps/kvmd/api/export.py" ] || die "export.py did not stage"
 tr -d '\r' < "$SSHPUB"                     > "$STAGE/in/authorized_keys"
 cp "$PUB" "$STAGE/in/signing.pub"
 
