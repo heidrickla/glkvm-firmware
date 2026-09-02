@@ -62,7 +62,12 @@ unit). It enables:
   `kvmd.streamer.forever: true`, so kvmd's own streamer runs permanently and
   the classic UI, `/api/streamer/snapshot` and kvmd's OCR endpoint have a
   picture (vendor firmware never starts it).
-- **VNC** on `:5900`, autostarting across reboots.
+- **VNC** on `:5900`, autostarting across reboots. H.264 for TigerVNC ≥ 1.13
+  (keep the UI's video format on H.264; TigerVNC's Windows decoder only
+  renders it up to 1080p), JPEG for everything else; both need the two
+  `patches/kvmd/apps/vnc/` modules, because GL.iNet's ustreamer never writes
+  the JPEG sink and their kvmd-vnc restarted the streamer on every
+  re-negotiation.
 - **Patched kvmd modules** — everything under `patches/`, then one kvmd restart
   for the whole batch.
 

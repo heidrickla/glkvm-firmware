@@ -192,6 +192,28 @@ h = next(c for c in walk(code) if c.co_name == "__take_snapshot_handler")
 assert "text/plain" in h.co_consts, "patched api/streamer.pyc does not answer OCR as text/plain - wrong source?"
 PY
             ;;
+        kvmd/apps/vnc/__init__.py)
+            # The whole point of that patch: a JPEG source that polls /snapshot.
+            python3 - "$PYC" <<'PY'
+import marshal, sys
+code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
+assert "SnapshotStreamerClient" in code.co_names, "patched vnc/__init__.pyc has no SnapshotStreamerClient - wrong source?"
+PY
+            ;;
+        kvmd/apps/vnc/server.py)
+            # The whole point of that patch: streamer params applied once per connection.
+            python3 - "$PYC" <<'PY'
+import marshal, sys, types
+code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
+def walk(c):
+    yield c
+    for k in c.co_consts:
+        if isinstance(k, types.CodeType):
+            yield from walk(k)
+h = next(c for c in walk(code) if c.co_name == "_on_set_encodings")
+assert "_Client__streamer_params_applied" in h.co_names, "patched vnc/server.pyc does not gate set_params - wrong source?"
+PY
+            ;;
     esac
     ok "$rel installed; vendor kept as .pyc.orig"
     applied=$((applied + 1))
