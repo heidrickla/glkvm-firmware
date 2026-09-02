@@ -1535,12 +1535,24 @@ to TigerVNC as Open H.264 rects framed exactly as kvmd-vnc frames them:
 | same content transcoded 1920×1080 High 4.1 (x264) | **picture** |
 
 So TigerVNC's Windows decoder (Media Foundation `CLSID_CMSH264DecoderMFT`
-via `H264WinDecoderContext.cxx`, which leaves the MFT at its defaults and
-swallows every error silently) does not produce frames above 1080p, whatever
-the profile. Microsoft's decoder is documented to 4096×2304, so the limit is
-TigerVNC's use of it — most likely the unset
-`CODECAPI_AVDecVideoMaxCodedWidth/Height` — and a client-side fix. Linux
-TigerVNC uses FFmpeg and has no such limit (not measured here).
+via `H264WinDecoderContext.cxx`, which swallows every error silently) does
+not produce frames above 1080p, whatever the profile. Linux TigerVNC uses
+FFmpeg and has no such limit (not measured here).
+
+**Fixed on the client, same day.** Built TigerVNC 1.16.2 with MSYS2 (FLTK
+1.3.9 from source, since 1.16 refuses MSYS2's 1.4) and logging added where
+the decoder swallowed errors. The cause: the buffer that receives decoded
+NV12 frames is allocated once in the constructor from the decoder's
+*placeholder* output type, i.e. sized for 1920×1088 (4,147,200 bytes); a
+2560×1440 frame needs 5.5 MB, so every `ProcessOutput` failed silently and
+the drain loop spun. `contrib/tigervnc-windows-h264/` carries the patch
+(grow the buffer on the stream-change notification, log failures, break
+out of the loop) and `tools/build-tigervnc-h264.sh` reproduces the build.
+Raising `CODECAPI_AVDecVideoMaxCodedWidth/Height` was tried first and
+ablated out: not needed. Verified: replay of the unit's 1440p stream
+renders; live against `.15` with Auto select on, ~59 updates/s on the H.264
+memsink and zero ustreamer restarts; the installed copy in
+`%LOCALAPPDATA%\Programs\TigerVNC-h264` runs with only its own DLLs.
 
 A lever not pulled: GL.iNet's ustreamer takes `--venc-format 0:h264 1:h265
 2:mjpeg`, so the RV1126 encoder *can* emit hardware MJPEG — that would feed

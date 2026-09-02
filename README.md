@@ -151,6 +151,7 @@ tools/
   ocr.sh / ocr-fetch.py            tesseract on the unit; read the attached host's screen
   vnc-probe.py / vnc-churn.py      what kvmd-vnc really sends; TigerVNC's re-negotiation storm
   vnc-h264-replay.py               replay a captured H.264 stream to a viewer: is the decoder at fault?
+  build-tigervnc-h264.sh           TigerVNC for Windows that decodes the unit's 1440p H.264 (contrib/ has the patch)
   apply-vaulted-credential.sh      push the vaulted KVMD credential (Git Bash; one shell layer)
   uncomment-8888.awk               the classic-UI enable, shared by live + bake
   rk_pack.py / rk_sign.py          rebuild and sign a firmware image

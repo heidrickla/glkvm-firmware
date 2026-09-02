@@ -1,0 +1,120 @@
+diff --git a/common/rdr/FdInStream.cxx b/common/rdr/FdInStream.cxx
+index 25542a0..7a2245a 100644
+--- a/common/rdr/FdInStream.cxx
++++ b/common/rdr/FdInStream.cxx
+@@ -26,6 +26,8 @@
+ #include <sys/time.h>
+ #ifdef _WIN32
+ #include <winsock2.h>
++#include <io.h>      /* declares close() before the macro below renames it (newer MinGW-w64) */
++#include <unistd.h>
+ #define errorNumber WSAGetLastError()
+ #define close closesocket
+ #include <core/winerrno.h>
+diff --git a/common/rfb/H264WinDecoderContext.cxx b/common/rfb/H264WinDecoderContext.cxx
+index 71086fa..84283e5 100644
+--- a/common/rfb/H264WinDecoderContext.cxx
++++ b/common/rfb/H264WinDecoderContext.cxx
+@@ -29,11 +29,15 @@
+ #include <wmcodecdsp.h>
+ #define SAFE_RELEASE(obj) if (obj) { obj->Release(); obj = nullptr; }
+ 
++#include <core/LogWriter.h>
++
+ #include <rfb/PixelBuffer.h>
+ #include <rfb/H264WinDecoderContext.h>
+ 
+ using namespace rfb;
+ 
++static core::LogWriter vlog("H264WinDecoder");
++
+ // Older MinGW lacks this definition
+ #ifndef HAVE_VIDEO_PROCESSOR_MFT
+ static GUID CLSID_VideoProcessorMFT = { 0x88753b26, 0x5b24, 0x49bd, { 0xb2, 0xe7, 0xc, 0x44, 0x5c, 0x78, 0xc9, 0x82 } };
+@@ -159,9 +163,17 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+   // extract actual size, including possible cropping
+   ParseSPS(h264_buffer, len);
+ 
+-  if (FAILED(decoder->ProcessInput(0, input_sample, 0)))
++  HRESULT hrin = decoder->ProcessInput(0, input_sample, 0);
++  if (FAILED(hrin))
+   {
+-    // Silently ignore errors, hoping its a temporary encoding glitch
++    // glkvm-firmware patch: say so, once per distinct error, instead of silence
++    static HRESULT last_hrin = S_OK;
++    if (hrin != last_hrin)
++    {
++      vlog.error("ProcessInput failed: hr=0x%08lx (len=%u, parsed %ux%u)",
++                 (unsigned long)hrin, (unsigned)len, full_width, full_height);
++      last_hrin = hrin;
++    }
+     return;
+   }
+ 
+@@ -226,9 +238,12 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+       if FAILED(MFGetAttributeSize(output_type, MF_MT_FRAME_SIZE, &width, &height))
+       {
+           // Silently ignore errors, hoping its a temporary encoding glitch
++          vlog.error("Stream change without a frame size");
+           output_type->Release();
+           break;
+       }
++      vlog.info("Stream change: decoder output %ux%u, SPS says %ux%u (crop %ux%u)",
++                width, height, full_width, full_height, crop_width, crop_height);
+ 
+       // if MFT reports different width or height than calculated cropped width/height
+       if (crop_width != 0 && crop_height != 0 && (width != crop_width || height != crop_height))
+@@ -275,13 +290,53 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+         if (FAILED(MFCreateMemoryBuffer(info.cbSize, &converted_buffer)))
+         {
+           // Silently ignore errors, hoping its a temporary encoding glitch
++          vlog.error("Could not allocate the converter output buffer (%lu bytes)", (unsigned long)info.cbSize);
+         }
+         else
+         {
++          converted_sample->RemoveAllBuffers();
+           converted_sample->AddBuffer(converted_buffer);
+         }
+       }
+       output_type->Release();
++
++      // glkvm-firmware patch: the decoded-frame buffer was sized in the
++      // constructor from the decoder's placeholder output type, i.e. before
++      // it had seen any stream. A 2560x1440 NV12 frame does not fit in it,
++      // ProcessOutput then fails on every frame, and the window stays black
++      // while 1920x1080 works. Re-size it for the stream we actually got.
++      MFT_OUTPUT_STREAM_INFO dinfo;
++      if (SUCCEEDED(decoder->GetOutputStreamInfo(0, &dinfo)))
++      {
++        DWORD maxlen = 0;
++        decoded_buffer->GetMaxLength(&maxlen);
++        if (dinfo.cbSize > maxlen)
++        {
++          IMFMediaBuffer* grown = nullptr;
++          if (SUCCEEDED(MFCreateMemoryBuffer(dinfo.cbSize, &grown)))
++          {
++            decoded_sample->RemoveAllBuffers();
++            decoded_buffer->Release();
++            decoded_buffer = grown;
++            decoded_sample->AddBuffer(decoded_buffer);
++            vlog.info("Decoded-frame buffer grown from %lu to %lu bytes",
++                      (unsigned long)maxlen, (unsigned long)dinfo.cbSize);
++          }
++          else
++            vlog.error("Could not grow the decoded-frame buffer to %lu bytes", (unsigned long)dinfo.cbSize);
++        }
++      }
++    }
++    else
++    {
++      // glkvm-firmware patch: any other failure used to spin this loop forever
++      static HRESULT last_hrout = S_OK;
++      if (hr != last_hrout)
++      {
++        vlog.error("ProcessOutput failed: hr=0x%08lx", (unsigned long)hr);
++        last_hrout = hr;
++      }
++      break;
+     }
+   }
+ 

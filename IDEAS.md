@@ -287,12 +287,13 @@ ustreamer's snapshot path at any resolution. TigerVNC on Windows decodes
 the H.264 only up to 1080p — measured by replaying the unit's stream and
 transcodes to it — so with a 1440p host it stays black.
 
-Open, client side: TigerVNC's `H264WinDecoderContext.cxx` never raises
-`CODECAPI_AVDecVideoMaxCodedWidth/Height` on the Media Foundation decoder
-and ignores every decoder error. A patched Windows build (or an upstream
-issue with the replay evidence) would give H.264 VNC at 1440p. Open, server
-side: the JPEG path costs ~0.4 MB/frame — a scaled or region-diffed JPEG
-would suit slow links.
+✅ Client side, done: TigerVNC's `H264WinDecoderContext.cxx` sized its
+decoded-frame buffer from a placeholder output type (1920×1088) and never
+grew it. `contrib/tigervnc-windows-h264/` has the patch and
+`tools/build-tigervnc-h264.sh` the build; the patched viewer renders the
+unit's 1440p stream live. Worth sending upstream with the replay evidence.
+Open, server side: the JPEG path costs ~0.4 MB/frame — a scaled or
+region-diffed JPEG would suit slow links.
 
 ### ✅ HID — proven end to end, type and read back
 After a gadget rebuild the host had stopped polling the HID endpoints while
