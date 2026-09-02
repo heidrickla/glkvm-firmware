@@ -1473,8 +1473,13 @@ bake asserts `text/plain` is in the patched handler. Verified on `.15`:
 UI's OCR button now delivers text. Small text still reads imperfectly
 (`https` came back as `etps` from a browser address bar): GL.iNet's
 recogniser is upstream's — a 2× bicubic upscale and an `ImageOps.grayscale()`
-whose result is discarded, in both trees — so that is a tuning item, not a
-bug of theirs.
+whose result is discarded, in both trees. Measured on the unit with
+synthetic ~11 px text on dark and light backgrounds: assigning the
+grayscale, 3× upscale, `ocr.sh`'s autocontrast + threshold pass and an
+adaptive upscale all score the same as the vendor pipeline (similarity
+0.98–0.99, one of three lines exact). Tesseract grayscales internally;
+preprocessing is not the lever for this font size, so the vendor pipeline
+stays.
 
 **`ocr.sh read` now takes its frame from kvmd's streamer.** With
 `streamer.forever: true` the capture node is always held, so the transient

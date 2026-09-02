@@ -264,10 +264,13 @@ be outputting video. With HDMI in connected it read the desktop's app text;
 The classic UI's Text → OCR button works too, after a second one-line
 vendor fix: 1.10.0 answered `?ocr=1` as JSON while the (upstream) UI copies
 the body to the clipboard verbatim; `patches/kvmd/apps/kvmd/api/streamer.py`
-restores upstream's `text/plain`. Open tuning item: small text (a browser
-address bar) still misreads; the recogniser is upstream's 2× upscale with a
-discarded grayscale call, so a proper grayscale + threshold pass in `ocr.py`
-is the next step if it matters.
+restores upstream's `text/plain`. Small text (a browser address bar) still
+misreads. Measured on the unit with synthetic ~11 px text, dark and light
+backgrounds: the vendor pipeline (2× bicubic, grayscale call discarded),
+grayscale assigned, 3× upscale, `ocr.sh`'s autocontrast + threshold, and an
+adaptive upscale all score the same (similarity 0.98–0.99, one of three
+lines exact). Tesseract grayscales internally; preprocessing is not the
+lever. Closed — bigger source text or a different engine would be.
 
 kvmd's **own** OCR endpoint (`/api/streamer/snapshot?ocr=1`) was broken on
 1.10.0 by a vendor bug — a dropped `@contextlib.contextmanager` — fixed by
