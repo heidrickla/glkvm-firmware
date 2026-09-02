@@ -184,6 +184,18 @@ kvmd:
     streamer:
         forever: true
 
+        # H.264 bitrate CAP, in kbps. GL.iNet's main.yaml sets 2000, which is
+        # thin at 1440p60 and thinner at 4K30 (both measured working). 20000
+        # is the most kvmd accepts and the top of GL.iNet's own UI presets
+        # (500/2000/5000/8000/20000); the RV1126 encoder took it live with a
+        # 5000-25000 rate-control window. It is a cap: a static desktop sits
+        # at ~1.8-2.5 Mbit/s under any cap, so idle costs nothing and motion
+        # gets the bits. It also governs what the Vue UI's WebRTC sends, so a
+        # WAN viewer may want less. Lewis, 2026-09-01: "the max bitrate
+        # capable of the device". The UI's quality presets override it live.
+        h264_bitrate:
+            default: 20000
+
     # MSD storage must stay READ-WRITE. Measured on 1.10.0, 2026-09-01:
     #
     # Upstream kvmd keeps the media partition RO and remounts RW around every

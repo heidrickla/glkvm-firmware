@@ -1597,7 +1597,32 @@ Lewis offered an 8K-capable monitor for tests. Measured instead of assumed:
   a still picture. The cap only bites under motion, so raising it costs
   nothing at idle and buys quality when the screen moves; restored to 2000.
   Whether to raise the default is a bandwidth decision (it also governs what
-  the Vue UI's WebRTC sends).
+  the Vue UI's WebRTC sends). **Decided the same day** (Lewis: "the max
+  bitrate capable of the device"): `override.yaml.example` now sets
+  `kvmd.streamer.h264_bitrate.default: 20000` — kvmd's validator maximum,
+  and the top of GL.iNet's own UI presets (500/2000/5000/8000/20000). The
+  encoder accepted 20000 live (`Successfully set encoder bitrate to: 20000
+  (min: 5000, max: 25000)`); the static desktop then carried 2.5 Mbit/s.
+  A UI quality preset still overrides it for that session.
+
+  **Under real motion** (Lewis: "just play a nat geo YouTube video" — a
+  National Geographic full episode, muted, fullscreen on the captured
+  display), sink bitrate over 6 s samples:
+
+  | cap (kbps) | 1440p60, video in a window | 1440p60, fullscreen | 4K30, fullscreen |
+  | --- | --- | --- | --- |
+  | 2000 | 1.5–1.8 Mbit/s | — | 4.7–5.1 Mbit/s |
+  | 8000 | 5.3–5.6 | — | 6.4–6.9 |
+  | 20000 | 5.2–5.4 | **9.6–10.1** | **9.8–14.2** |
+
+  So the old 2000 default really did starve motion at 1440p (a 3× cut on
+  a windowed clip), the encoder overshoots its "cap" on dense 4K motion
+  (5 Mbit/s against 2000), and 20000 lets 4K30 spend up to ~14 Mbit/s. Load
+  stayed ~9.5 throughout; no streamer restarts (bitrate changes log
+  `Bitrate monitor: /tmp/bitrate changed`, nothing else). Note for the EDID
+  tool: with the 4K preset applied, Windows switched this host from a clone
+  to an *extended* desktop, so the KVM display showed the wallpaper until
+  the video window was moved onto it (Win+Shift+Right).
 - **How a switch is applied:** `POST /api/upgrade/edid` writes the hex to
   `/tmp/edid.bin` and the user file, then runs a per-model command. The map
   knows `rm10rc`, `rm4pe` and `rmq1`; this unit's model string is `rm10`, so

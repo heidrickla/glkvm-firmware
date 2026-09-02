@@ -290,12 +290,12 @@ transcodes to it — so with a 1440p host it stays black.
 ✅ 4K30 through the whole chain: `tools/edid.sh <ip> set E3840x2160` makes
 the host output 3840×2160@30 and the capture, the H.264 encoder (High 5.1),
 kvmd-vnc and the patched TigerVNC all follow (FINDINGS has the table).
-Open from it: `h264_bitrate` stays at 2000 kbps whatever the resolution.
-Measured: it is a cap applied live (no restart), and a static screen sits
-at ~1.8 Mbit/s under any cap, so a higher default costs nothing at idle
-and only shows under motion — Lewis's bandwidth call, since it also sets
-what the Vue UI's WebRTC sends. The unit's factory EDID prefers 1440p60;
-pick the 4K preset when the host's screen matters more than frame rate.
+✅ `h264_bitrate` default raised to 20000 kbps (the device's and GL.iNet's
+own maximum) in `override.yaml.example` — Lewis's call, 2026-09-01. It is
+a live cap: idle sits at ~2 Mbit/s regardless, motion gets the bits; the
+Vue UI's quality presets still override it per session. The unit's factory
+EDID prefers 1440p60; pick the 4K preset when the host's screen matters
+more than frame rate.
 
 ✅ Client side, done: TigerVNC's `H264WinDecoderContext.cxx` sized its
 decoded-frame buffer from a placeholder output type (1920×1088) and never
