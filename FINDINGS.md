@@ -1456,6 +1456,26 @@ returns 200 and types nothing. Restricting OCR to a region also keeps the
 rest of someone's desktop out of the transcript — the first full-frame read
 returned every window on the mirrored screen.
 
+**The classic UI's OCR button copied JSON, not text.** Lewis tried Text → OCR
+in the classic UI and his clipboard received
+`{"ok": true, "result": "…"}`. Upstream kvmd answers
+`GET /api/streamer/snapshot?ocr=1` with the recognised text as `text/plain`,
+and the classic UI's `ocr.js` (identical to upstream on the device) copies
+the response body verbatim; GL.iNet's 1.10.0 wrapped the answer in
+`make_json_response()`. Their Vue UI never calls `?ocr=1` (no hits in the
+glweb bundle), so nothing of theirs used the JSON.
+`patches/kvmd/apps/kvmd/api/streamer.py` restores upstream's `text/plain`
+response and nothing else; provenance measured (the device's
+`api/streamer.pyc` compiles from the vendor source with zero semantic
+differences, only line tables differ); manifest-scoped `rm10-1.10.*`; the
+bake asserts `text/plain` is in the patched handler. Verified on `.15`:
+`Content-Type: text/plain` on a region read, and Lewis confirmed the classic
+UI's OCR button now delivers text. Small text still reads imperfectly
+(`https` came back as `etps` from a browser address bar): GL.iNet's
+recogniser is upstream's — a 2× bicubic upscale and an `ImageOps.grayscale()`
+whose result is discarded, in both trees — so that is a tuning item, not a
+bug of theirs.
+
 **`ocr.sh read` now takes its frame from kvmd's streamer.** With
 `streamer.forever: true` the capture node is always held, so the transient
 ustreamer path it used to spin up would refuse forever. It now asks

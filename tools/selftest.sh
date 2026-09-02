@@ -145,8 +145,9 @@ if command -v "$PY" >/dev/null 2>&1; then
             NPATCH=$((NPATCH + 1))
             try "compile patches/$(printf '%s' "$p" | sed 's|.*/patches/||')" "$PY" -m py_compile "$p"
         done < "$TMPD/patches"
-        # If patches/ exists at all it must hold the three modules we ship.
-        floor "patched modules" "$NPATCH" 3
+        # If patches/ exists at all it must hold every module we ship:
+        # export, info/__init__, info/health, ocr, api/streamer.
+        floor "patched modules" "$NPATCH" 5
     else
         fail "patches/ is missing - provision.sh would apply nothing and still report success"
     fi
