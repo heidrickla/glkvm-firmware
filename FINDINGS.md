@@ -1337,6 +1337,44 @@ change. Full report: [docs/firmware-diff-1.8.1-to-1.10.0.md](docs/firmware-diff-
 `venc_mode`, the `lt86102sxe_setup` signal hooks and drops `h264_bitrate`
 10000 → 2000; `janus.plugin.ustreamer.jcfg` acap `hw:0,0` → `multi_hdmi_input`.
 
+### Correction: the classic UI on :8888 is controls-only as shipped
+
+Earlier sections call the classic PiKVM UI "live" on the strength of a 200
+from its login page. Its **video** comes from kvmd's own streamer, and on both
+firmwares that streamer never runs: GL.iNet's 1.10.0 streamer manager starts
+ustreamer only on its own `need_ustreamer` demand (their Vue UI / WebRTC path
+raises it; the classic UI does not), so `:8888/streamer/state` and
+`/streamer/snapshot` answer **502** — no backend behind nginx. Keyboard, mouse,
+ATX, MSD and the rest of the classic UI work; the picture does not.
+
+Measured 2026-09-01 on 1.10.0 with `kvmd.streamer.forever: true` set *inside
+the existing `kvmd:` block* of `override.yaml`:
+
+| | |
+| --- | --- |
+| ustreamer | started by kvmd (`/usr/bin/ustreamer --device=/dev/video0 -r 1920x1080 … --jpeg-sink=kvmd::ustreamer::jpeg --h264-sink=kvmd::ustreamer::h264`) |
+| `:8888/streamer/state` | **200** — `source.online=True`, 1920×1080, 0 fps (the attached host was not outputting video) |
+| `/api/streamer/snapshot?ocr=1` | reachable; 503 only for want of a frame |
+| janus | logged `Memsink /dev/shm/kvmd::ustreamer::h264 is ready` |
+| auth | stayed off; load average unchanged (~10.6, GL.iNet's pipeline dominates either way) |
+
+So `forever: true` gives the classic UI its video, kvmd snapshots, and kvmd's
+own OCR endpoint on 1.10.0. It was **reverted** after the test: whether kvmd's
+ustreamer should run permanently alongside GL.iNet's adaptive WebRTC pipeline
+(which the log says can "ignore" `need_ustreamer` in adaptive mode) is a call
+for Lewis, and the host needs to output video before the picture itself can be
+verified. The default in `override.yaml.example` is unchanged.
+
+**A trap found on the way.** The first attempt appended a *second* top-level
+`kvmd:` block to `override.yaml`. PyYAML keeps the last duplicate key, so the
+appended block silently **replaced** the first — `auth.enabled: false`, the MSD
+fixes and the GPIO scheme all vanished, auth came on, and every `/streamer`
+call returned 401. That looked exactly like a 1.10.0 auth change and cost a
+round of investigation. It is the same family as the silently-accepted unknown
+key earlier: `override.yaml` mistakes do not error. `selftest.sh` now refuses
+an example with duplicate top-level keys, and `verify-gates.sh` proves that
+check fires.
+
 ### The credential leak in that diff
 
 The first run of the diff tool printed `/etc/kvmd/ipmipasswd` — which maps

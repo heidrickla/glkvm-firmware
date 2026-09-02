@@ -160,7 +160,26 @@ if command -v "$PY" >/dev/null 2>&1; then
     if "$PY" -c "import yaml" >/dev/null 2>&1; then
         _out=$("$PY" - "$ROOT/tools/override.yaml.example" <<'PY' 2>&1
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+
+# PyYAML keeps the LAST duplicate mapping key and says nothing. A second
+# top-level `kvmd:` block appended to override.yaml therefore REPLACED the
+# first -- auth.enabled: false, the MSD fixes and the GPIO scheme vanished,
+# auth came on, and every /streamer call returned 401 in a way that looked
+# exactly like a firmware change. Refuse duplicates at any depth.
+class Strict(yaml.SafeLoader):
+    pass
+
+def no_dupes(loader, node, deep=False):
+    seen = set()
+    for k_node, _ in node.value:
+        k = loader.construct_object(k_node, deep=deep)
+        if k in seen:
+            raise ValueError("duplicate key %r at line %d - the later one silently wins in kvmd" % (k, k_node.start_mark.line + 1))
+        seen.add(k)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_dupes)
+d = yaml.load(open(sys.argv[1], encoding="utf-8"), Loader=Strict)
 assert isinstance(d, dict), "not a mapping"
 missing = [k for k in ("kvmd", "vnc") if k not in d]
 assert not missing, "missing top-level keys: %s" % missing
