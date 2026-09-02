@@ -37,6 +37,25 @@ gzip -t "$ARCHIVE" 2>/dev/null || die "checkpoint fails its gzip integrity check
 SSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@$IP"
 $SSH true 2>/dev/null || die "cannot ssh to $IP"
 
+# FIRMWARE GUARD. A checkpoint's site-packages is bytecode for the kvmd it was
+# taken from. Restoring a 1.8.1 tree onto a unit running 1.10.0 puts 1.8.1
+# bytecode under a 1.10.0 daemon -- and on 2026-09-01 drift.sh offered exactly
+# that, because it picked the "newest" checkpoint by label. checkpoint.sh
+# records the firmware on the first line of services.txt beside the archive;
+# a mismatch, or no record, refuses before a single byte moves. --force is
+# for the case where you have read this and mean it.
+FORCE=no
+for a in "$@"; do [ "$a" = "--force" ] && FORCE=yes; done
+CP_FW=$(sed -n 's/^# firmware: //p' "$(dirname "$ARCHIVE")/services.txt" 2>/dev/null | head -1)
+DEV_FW=$($SSH 'grep -E "^VERSION=" /etc/os-release | cut -d= -f2 | tr -d "\"\r\n"' 2>/dev/null || echo unknown)
+if [ "$FORCE" != "yes" ]; then
+    [ -n "$CP_FW" ] || die "checkpoint records no firmware (no '# firmware:' line in services.txt); unit runs $DEV_FW. Refusing without --force."
+    [ "$CP_FW" = "$DEV_FW" ] || die "checkpoint is from firmware $CP_FW; the unit runs $DEV_FW. Restoring it would put the wrong bytecode under kvmd. Refusing without --force."
+    echo ">> firmware matches: $DEV_FW"
+else
+    echo ">> --force: skipping the firmware check (checkpoint: ${CP_FW:-unrecorded}, unit: $DEV_FW)"
+fi
+
 echo ">> restoring site-packages from $(basename "$ARCHIVE") ($(du -h "$ARCHIVE" | cut -f1))"
 $SSH 'rm -rf /userdata/restore && mkdir -p /userdata/restore'
 gzip -dc "$ARCHIVE" | $SSH 'tar -xf - -C /userdata/restore'

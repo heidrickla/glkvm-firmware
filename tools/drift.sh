@@ -54,9 +54,15 @@ echo "$IP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
   || die "'$IP' is not a bare IPv4 address (refusing hostnames - mDNS can hit the wrong unit)"
 
 if [ -z "$CP" ]; then
-    # Newest checkpoint for THIS ip. Names are <label>-<ip>-<YYYYmmdd-HHMMSS>,
-    # so a lexical sort is chronological.
-    CP=$(ls -d "$HERE/../checkpoints/"*-"$IP"-* 2>/dev/null | sort | tail -1 || true)
+    # Newest checkpoint for THIS ip, by the trailing YYYYmmdd-HHMMSS -- NOT a
+    # lexical sort of the whole name. That sorted by label, so on 2026-09-01
+    # "provisioned-reboot-verified-..." (a 1.8.1 checkpoint) beat
+    # "flashed-1.10.0-final-..." and this script compared a 1.10.0 unit against
+    # 1.8.1, reported drift, and offered the 1.8.1 tree as a restore target.
+    CP=$(for d in "$HERE/../checkpoints/"*-"$IP"-*/; do
+             [ -d "$d" ] || continue
+             printf '%s %s\n' "$(basename "$d" | sed 's/.*-\([0-9]\{8\}-[0-9]\{6\}\)$/\1/')" "${d%/}"
+         done | sort | tail -1 | cut -d' ' -f2-)
     [ -n "$CP" ] || die "no checkpoint found for $IP in checkpoints/ - run tools/checkpoint.sh first"
 fi
 [ -d "$CP" ] || die "not a checkpoint directory: $CP"
@@ -66,6 +72,15 @@ fi
 # first item. Nothing here feeds ssh on stdin, so -n is safe throughout.
 SSH="ssh -n -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@$IP"
 $SSH true 2>/dev/null || die "cannot ssh to $IP"
+
+# A checkpoint from a different firmware is not a baseline for this unit and
+# must never be offered as a restore target: its site-packages is bytecode for
+# a different kvmd. checkpoint.sh records the firmware on the first line of
+# services.txt; a checkpoint without that line is refused rather than guessed.
+CP_FW=$(sed -n 's/^# firmware: //p' "$CP/services.txt" 2>/dev/null | head -1)
+DEV_FW=$($SSH 'grep -E "^VERSION=" /etc/os-release | cut -d= -f2 | tr -d "\"\r\n"' 2>/dev/null || echo unknown)
+[ -n "$CP_FW" ] || die "$(basename "$CP") does not record its firmware (no '# firmware:' line in services.txt) - refusing to compare a unit on $DEV_FW against it"
+[ "$CP_FW" = "$DEV_FW" ] || die "checkpoint is from firmware $CP_FW; the unit runs $DEV_FW. Not a baseline, and NOT a restore target."
 
 echo "=== drift: $IP vs $(basename "$CP") ==="
 

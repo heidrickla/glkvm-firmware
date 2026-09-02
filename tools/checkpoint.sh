@@ -51,7 +51,12 @@ echo "   pip freeze ..."
 $SSH 'pip freeze --disable-pip-version-check 2>/dev/null' > "$OUT/pip-freeze.txt"
 
 echo "   running services ..."
-$SSH 'echo "# uptime"; uptime
+# First line is the firmware VERSION, on its own, so drift.sh and
+# restore-checkpoint.sh can refuse to use this checkpoint against a unit on a
+# different firmware. A 1.8.1 site-packages restored onto a 1.10.0 kvmd is
+# 1.8.1 bytecode under a 1.10.0 daemon; the check has to be mechanical.
+$SSH 'printf "# firmware: %s\n" "$(grep -E "^VERSION=" /etc/os-release | cut -d= -f2 | tr -d "\"")"
+      echo "# uptime"; uptime
       echo "# listening"; netstat -ltnu 2>/dev/null | grep LISTEN
       echo "# kvmd"; python3 -c "import kvmd; print(kvmd.__version__)" 2>/dev/null
       echo "# os"; head -3 /etc/os-release 2>/dev/null' > "$OUT/services.txt" 2>/dev/null || true
