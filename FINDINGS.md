@@ -1295,7 +1295,15 @@ installed, VNC hook present, tesseract loading, 905 MB of fresh overlay.
 `.15`'s address survived because it is a DHCP reservation, not overlay config.
 
 ⚠ **Every checkpoint taken on 1.8.1 is now poison for this unit** — a 1.8.1
-`site-packages` under a 1.10.0 kvmd. Use `flashed-1.10.0-final-*` or later.
+`site-packages` under a 1.10.0 kvmd. And that stopped being a prose warning
+the same evening: `drift.sh` chose its "newest" checkpoint by sorting whole
+names, so `provisioned-reboot-verified-…` (1.8.1) outranked
+`flashed-1.10.0-final-…`, the 1.10.0 unit was compared against 1.8.1, and the
+1.8.1 tree was offered as a restore target. Now `checkpoint.sh` records the
+firmware on the first line of `services.txt`, `drift.sh` picks by timestamp and
+**refuses** a checkpoint from another firmware, and `restore-checkpoint.sh`
+refuses the same before a byte moves (`--force` to override). All three
+behaviours were watched firing [measured].
 
 ### Diff first, then debug — `tools/firmware-diff.py`
 
