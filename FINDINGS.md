@@ -1437,6 +1437,37 @@ Afterwards: one ustreamer, janus restarted (new pid), `gl-pion` attached,
 only warning in the window was `webrtc_client`'s own `netlink bind failed`,
 which is its logging, not ours. The default holds in every mode the UI offers.
 
+**More of the HID, MSD, GPIO and WoL surface exercised, 2026-09-02** (by the
+ha-management session while testing `ha-glkvm`, with Lewis's
+authorisation for everything but ATX; verified here read-only afterwards):
+
+- `/api/hid` jiggler: `enabled` is the *config* option (may the jiggler be
+  used), `active` is the running state; `POST /api/hid/set_params?jiggler=1|0`
+  sets the button half of `active` and the schedule ORs in
+  (`plugins/hid/__init__.py`). kvmd logs "Mouse jiggler started/stopped".
+  Reading `enabled` as the switch state left the jiggler running for two
+  minutes before it was noticed — the integration now reads `active`. Off
+  again, verified (`enabled=True active=False`).
+- MSD from the host's side: a valid 1 MiB ISO9660 image uploaded with
+  `POST /api/msd/write`, selected and attached, appeared to Windows as media
+  in **"E: Glinet Optical Drive"** — that drive exists on the host
+  permanently; attaching inserts media rather than adding a device, and the
+  marker file was readable. A 1 MiB image of zeros attaches on the unit but
+  Windows reports `MediaLoaded=False`. The storage list lags a removal by a
+  few seconds.
+- All 200 and clean in `kvmd.log`: GPIO pulse on `demo_button`,
+  `POST /api/wol/wake` to the stored target, `send_shortcut ShiftLeft`,
+  `/api/hid/reset` (gadget back online within seconds), `set_params
+  mouse_output=usb_rel` and back.
+- Side effect worth knowing: the second gadget function, `mass_storage.1`
+  (rw, removable, non-cdrom — GL.iNet's "expose the storage to the host as
+  a flash drive" mode, what `msd.sh stick` drives), hands the host the
+  storage root itself. Windows wrote `System Volume Information/` into
+  `/userdata/media` during yesterday's stick test, and kvmd then listed
+  `System Volume Information/IndexerVolumeGuid` as an "image" to every
+  client, HA included. Removed by hand; expect it back after any stick
+  session with a Windows host.
+
 **kvmd's own OCR endpoint had a vendor bug.** `GET /api/streamer/snapshot?ocr=1`
 returned 500: `TypeError: 'generator' object does not support the context
 manager protocol` — 1.10.0 dropped `@contextlib.contextmanager` from
