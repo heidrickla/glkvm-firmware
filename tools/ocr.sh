@@ -21,14 +21,24 @@
 #   ONLY sonames the unit lacks -- it never overwrites a Buildroot library.
 #
 # * kvmd's own OCR endpoint, GET /api/streamer/snapshot?ocr=1, needs a snapshot
-#   from kvmd's streamer -- and on 1.8.1 that streamer NEVER RUNS. GL.iNet
-#   stripped the executable out of streamer.cmd; video goes through their own
-#   rv1126 -> janus path, which produces no JPEG anyone can fetch, and no
-#   memsink exists in /dev/shm. So `read` grabs a frame itself: it starts the
-#   shipped (GL.iNet-patched) ustreamer on /dev/video0 for a few seconds, asks
-#   its unix socket for /snapshot, and stops it. Measured: auto-negotiated
-#   format, ~49 KB JPEG, ~4 s. It refuses if something else already holds
-#   /dev/video0, rather than fight the vendor pipeline while someone is watching.
+#   from kvmd's streamer -- and on vendor firmware that streamer NEVER RUNS
+#   (GL.iNet starts it only on their own demand). Since 2026-09-01 our
+#   override runs it permanently (kvmd.streamer.forever: true), so `read`
+#   first asks it for a frame over /run/kvmd/ustreamer.sock. Only when that
+#   socket is absent (forever off, vendor firmware) does `read` grab a frame
+#   itself: it starts the shipped (GL.iNet-patched) ustreamer on /dev/video0
+#   for a few seconds, asks its unix socket for /snapshot, and stops it.
+#   Measured: auto-negotiated format, ~49 KB JPEG, ~4 s. That path refuses if
+#   something else already holds /dev/video0, rather than fight the vendor
+#   pipeline while someone is watching.
+#
+# * kvmd's OCR endpoint also takes a region: ?ocr=1&ocr_left=L&ocr_top=T
+#   &ocr_right=R&ocr_bottom=B (pixels). Reading only the window you care about
+#   keeps the rest of someone's desktop out of your transcript; `read --crop
+#   L,T,R,B` does the same here.
+#
+# * /api/hid/print takes the text as the REQUEST BODY (curl --data-binary),
+#   not a query parameter. A ?text=... request returns 200 and types nothing.
 #
 #   That ustreamer IGNORES SIGTERM. A plain kill followed by wait hangs forever
 #   -- it cost a 10-minute timeout to learn. It gets SIGKILL.
@@ -197,7 +207,8 @@ status)
     $SSH -n "printf '  manifest      : %s files\n' \"\$(wc -l < $MANIFEST 2>/dev/null || echo 0)\"
              printf '  libtesseract  : '; python3 -c 'import ctypes; ctypes.CDLL(\"/usr/lib/libtesseract.so.5\"); print(\"loads\")' 2>&1 | tail -1
              printf '  tessdata      : %s\n' \"\$(ls /usr/share/tessdata 2>/dev/null | tr '\n' ' ')\"
-             printf '  /dev/video0   : %s\n' \"\$(for p in /proc/[0-9]*; do for fd in \$p/fd/*; do t=\$(readlink \"\$fd\" 2>/dev/null); case \"\$t\" in /dev/video0) echo \"held by pid \${p#/proc/}\";; esac; done; done 2>/dev/null | sort -u | head -1)\"; echo"
+             printf '  /dev/video0   : %s\n' \"\$(for p in /proc/[0-9]*; do for fd in \$p/fd/*; do t=\$(readlink \"\$fd\" 2>/dev/null); case \"\$t\" in /dev/video0) echo \"held by pid \${p#/proc/}\";; esac; done; done 2>/dev/null | sort -u | head -1)\"
+             printf '  kvmd streamer : %s\n' \"\$([ -S /run/kvmd/ustreamer.sock ] && echo 'running (read uses its frames)' || echo 'not running (read starts a transient ustreamer)')\"; echo"
     printf '  kvmd ocr api  : '; curl -sk --max-time 12 "https://$IP/api/streamer/ocr" 2>/dev/null | tr -d ' \n' | cut -c1-120; echo
     ;;
 
@@ -213,13 +224,24 @@ read)
         esac
     done
     if [ -z "$FILE" ]; then
-        # Grab a frame ourselves. Refuse to open the capture node under
-        # whatever is already using it -- that is the vendor video path with a
-        # viewer attached, and two readers on one CIF node is not a test worth
-        # running on someone's live session.
-        if $SSH -n 'for p in /proc/[0-9]*; do for fd in $p/fd/*; do t=$(readlink "$fd" 2>/dev/null); case "$t" in /dev/video0) exit 0;; esac; done; done 2>/dev/null; exit 1'; then
+        # Since 2026-09-01 the override runs kvmd's own streamer permanently
+        # (kvmd.streamer.forever: true), so the normal case is to ask IT for
+        # the frame over its unix socket: no second reader on the capture node,
+        # no start-up wait, and the same JPEG the classic UI and kvmd's OCR
+        # endpoint see. Measured 2026-09-01: 2560x1440, ~360 KB, under a second.
+        if $SSH -n '[ -S /run/kvmd/ustreamer.sock ] || exit 1
+            code=$(curl -s --max-time 6 --unix-socket /run/kvmd/ustreamer.sock -o /tmp/ocr-frame.jpg -w "%{http_code}" http://localhost/snapshot 2>/dev/null)
+            [ "$code" = "200" ] && [ -s /tmp/ocr-frame.jpg ] || exit 1
+            printf "  frame: %s bytes (from kvmd streamer)\n" "$(wc -c < /tmp/ocr-frame.jpg)"'; then
+            :
+        # No kvmd streamer (forever off, or vendor firmware): grab a frame
+        # ourselves. Refuse to open the capture node under whatever is already
+        # using it -- that is the vendor video path with a viewer attached, and
+        # two readers on one CIF node is not a test worth running on someone's
+        # live session.
+        elif $SSH -n 'for p in /proc/[0-9]*; do for fd in $p/fd/*; do t=$(readlink "$fd" 2>/dev/null); case "$t" in /dev/video0) exit 0;; esac; done; done 2>/dev/null; exit 1'; then
             die "/dev/video0 is in use (someone is viewing the stream) - try again later or pass --file"
-        fi
+        else
         # The 1.8.1 ustreamer build returned the bridge's own "NO LIVE VIDEO"
         # splash when the host was silent; the 1.10.0 build logs "waiting for
         # HDMI signal" and never serves a frame. So a failure here is usually
@@ -245,6 +267,7 @@ read)
             fi
             rm -f /tmp/ocr-us.log
             printf "  frame: %s bytes\n" "$(wc -c < /tmp/ocr-frame.jpg)"' || die "could not capture a frame (on 1.10.0 the capture needs a live HDMI signal from the host)"
+        fi
         FILE=/tmp/ocr-frame.jpg
         [ -n "$KEEP" ] && { $SSH -n 'cat /tmp/ocr-frame.jpg' > "$KEEP"; ok "frame saved to $KEEP"; }
     fi

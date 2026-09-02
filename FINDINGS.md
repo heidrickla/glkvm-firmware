@@ -1386,9 +1386,22 @@ JPEG of the desktop — the classic UI has its picture; janus attaches to the
 h264 memsink; `gl_kvm_gui` and janus stay up; load ~9.3. **Default since
 2026-09-01** (Lewis: "leave streamer.forever: true as the default"):
 `override.yaml.example` carries it inside the `kvmd:` block, the bake asserts
-it is in the baked file, and `.15` was re-provisioned from the example. Still
-unmeasured: the interaction with GL.iNet's adaptive WebRTC path while someone
-is watching in the Vue UI.
+it is in the baked file, and `.15` was re-provisioned from the example.
+
+**Measured with Lewis watching in the Vue UI (its default WebRTC mode):** one
+capture process only — kvmd's ustreamer — with janus and `gl-pion` attached to
+its h264 memsink (`sinks.h264.has_clients=true`), `gl_kvm_gui` up, load +0.3.
+When the UI connected, kvmd restarted its streamer once (0.7 s) as the UI
+pushed its stream parameters, exactly as it would have *started* it on vendor
+firmware; after that the picture is shared. The remaining case is the UI's
+**GL WebRTC ("adaptive") mode**: `server.py` handles it explicitly —
+`__enter_adaptive_mode` force-stops kvmd's streamer and kills janus before
+starting `webrtc_client`, and the stream controller computes
+`internal_need = (... or stream_forever) and not adaptive_mode`, so `forever`
+is masked while adaptive mode is on and the full restart path runs on exit.
+GL.iNet wrote the `stream_forever` term into that expression themselves. The
+Mode selector lives in the UI's video settings; entry and exit have been read
+in the source, not yet watched live.
 
 **kvmd's own OCR endpoint had a vendor bug.** `GET /api/streamer/snapshot?ocr=1`
 returned 500: `TypeError: 'generator' object does not support the context
@@ -1414,12 +1427,29 @@ turned the keyboard online and a relative-mouse move turned the mouse online.
 After the reset all three HID endpoints are polled. Everything typed *before*
 the reset never reached the host.
 
-**Reading typed text back is blocked by geometry, not by the tools.** Windows
+**Reading typed text back was blocked by geometry, not by the tools.** Windows
 opens Start on the monitor holding the pointer and keeps the pointer on the
 primary; the capture sees the secondary. Sweeping the pointer ±10 000 px with
-the relative mouse never put it on the captured display. To close the loop,
-either the pointer (and hence Start) has to be on the secondary monitor, or a
-text field has to be open there — both are choices about Lewis's desktop.
+the relative mouse never put it on the captured display. Lewis then set the
+host to *duplicate* displays, and the loop closed on 2026-09-01: Win+R over
+kvmd's keyboard (`send_key` MetaLeft+KeyR), `POST /api/hid/print` with the
+marker `GLKVM HID OCR 4271`, then kvmd's own OCR restricted to the Run box
+(`/api/streamer/snapshot?ocr=1&ocr_left=0&ocr_top=980&ocr_right=430&ocr_bottom=1210`)
+returned `Open: GLKVM HID OCR 4271` — exact — and Esc closed the box; nothing
+ran. One gotcha cost a round: **`/hid/print` takes the text as the request
+body** (`curl --data-binary`), not a query parameter; a `?text=` request
+returns 200 and types nothing. Restricting OCR to a region also keeps the
+rest of someone's desktop out of the transcript — the first full-frame read
+returned every window on the mirrored screen.
+
+**`ocr.sh read` now takes its frame from kvmd's streamer.** With
+`streamer.forever: true` the capture node is always held, so the transient
+ustreamer path it used to spin up would refuse forever. It now asks
+`/run/kvmd/ustreamer.sock` for a snapshot first (2560×1440, ~350 KB, under a
+second) and only falls back to the transient path when that socket is absent
+(forever off, vendor firmware). Verified: `read --crop 1300,1180,1720,1215`
+returned the GL UI's own status line, `WebRTC H.264 - 2560x1440 / 1765 kbps /
+60 fps dynamic`.
 
 ### The credential leak in that diff
 
