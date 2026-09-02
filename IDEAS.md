@@ -254,10 +254,12 @@ firmware, so tesseract is the real path: Ubuntu noble's arm64 packages load
 as-is on the unit's glibc 2.41 (closure resolved from the package index by
 `ocr-fetch.py`, 23 packages, only missing sonames installed). Proven by
 reading "GLKVM 12345" off a device-rendered image, and the bridge's own
-"NO LIVE VIDEO" splash off a captured frame. `ocr.sh read` grabs a frame with a
-transient ustreamer on `/dev/video0` — on 1.10.0 that needs the attached host
-to actually be outputting video. With HDMI in connected (the host's secondary
-monitor, 2560×1440@60) it read the desktop's app text. Baked into the image.
+"NO LIVE VIDEO" splash off a captured frame. `ocr.sh read` takes its frame
+from kvmd's permanently running streamer (`/run/kvmd/ustreamer.sock`, under a
+second) and only spins up a transient ustreamer on `/dev/video0` when that
+socket is absent — on 1.10.0 either path needs the attached host to actually
+be outputting video. With HDMI in connected it read the desktop's app text;
+`--crop L,T,R,B` keeps the read to one window. Baked into the image.
 
 kvmd's **own** OCR endpoint (`/api/streamer/snapshot?ocr=1`) was broken on
 1.10.0 by a vendor bug — a dropped `@contextlib.contextmanager` — fixed by
