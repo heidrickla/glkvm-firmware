@@ -178,6 +178,20 @@ code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
 assert "contextmanager" in code.co_names, "patched ocr.pyc has no contextmanager - wrong source?"
 PY
             ;;
+        kvmd/apps/kvmd/api/streamer.py)
+            # The whole point of that patch: the OCR answer is text/plain again.
+            python3 - "$PYC" <<'PY'
+import marshal, sys, types
+code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
+def walk(c):
+    yield c
+    for k in c.co_consts:
+        if isinstance(k, types.CodeType):
+            yield from walk(k)
+h = next(c for c in walk(code) if c.co_name == "__take_snapshot_handler")
+assert "text/plain" in h.co_consts, "patched api/streamer.pyc does not answer OCR as text/plain - wrong source?"
+PY
+            ;;
     esac
     ok "$rel installed; vendor kept as .pyc.orig"
     applied=$((applied + 1))

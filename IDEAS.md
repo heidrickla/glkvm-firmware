@@ -261,6 +261,14 @@ socket is absent — on 1.10.0 either path needs the attached host to actually
 be outputting video. With HDMI in connected it read the desktop's app text;
 `--crop L,T,R,B` keeps the read to one window. Baked into the image.
 
+The classic UI's Text → OCR button works too, after a second one-line
+vendor fix: 1.10.0 answered `?ocr=1` as JSON while the (upstream) UI copies
+the body to the clipboard verbatim; `patches/kvmd/apps/kvmd/api/streamer.py`
+restores upstream's `text/plain`. Open tuning item: small text (a browser
+address bar) still misreads; the recogniser is upstream's 2× upscale with a
+discarded grayscale call, so a proper grayscale + threshold pass in `ocr.py`
+is the next step if it matters.
+
 kvmd's **own** OCR endpoint (`/api/streamer/snapshot?ocr=1`) was broken on
 1.10.0 by a vendor bug — a dropped `@contextlib.contextmanager` — fixed by
 `patches/kvmd/apps/kvmd/ocr.py` (1.10.x only, manifest-scoped, baked): 200

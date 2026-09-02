@@ -22,3 +22,4 @@ kvmd/apps/kvmd/api/export.py        *
 kvmd/apps/kvmd/info/__init__.py     rm10rc-1.8.*
 kvmd/apps/kvmd/info/health.py       rm10rc-1.8.*
 kvmd/apps/kvmd/ocr.py               rm10-1.10.*
+kvmd/apps/kvmd/api/streamer.py      rm10-1.10.*
