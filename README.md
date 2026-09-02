@@ -138,9 +138,14 @@ tools/
   drift.sh                         read-only diff of a unit against a checkpoint
   checkpoint.sh / restore-...      snapshot + roll back site-packages and /etc/kvmd
   bake-image.sh (+ .remote.sh)     build a signed image with provisioning inside
+  flash.sh                         flash a unit with it (irreversible; wipes the overlay)
+  firmware-diff.py                 what changed between two firmwares, module by module
+  ocr.sh / ocr-fetch.py            tesseract on the unit; read the attached host's screen
+  apply-vaulted-credential.sh      push the vaulted KVMD credential (Git Bash; one shell layer)
   uncomment-8888.awk               the classic-UI enable, shared by live + bake
   rk_pack.py / rk_sign.py          rebuild and sign a firmware image
   selftest.sh / verify-gates.sh    the CI checks, and proof they can fail
+docs/        firmware-diff-1.8.1-to-1.10.0.md — the measured delta (credentials redacted)
   rkfw_scan.py                     inspect an RKFW container
   enable_classic_ui.sh             uncomment the :8888 server block
   S99kvmd-vnc / S99kvmd-ipmi       init scripts for the extra daemons

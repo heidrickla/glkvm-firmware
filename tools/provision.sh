@@ -81,7 +81,7 @@ ok "connected — model=$MODEL version=$VER"
 
 # ---------------------------------------------------------------- 1. classic UI
 echo
-echo "[1/4] classic PiKVM UI on :8888"
+echo "[1/5] classic PiKVM UI on :8888"
 if $SSH 'grep -qE "^[[:space:]]*listen[[:space:]]+8888" /etc/kvmd/nginx-kvmd.conf'; then
     ok "already enabled"
 else
@@ -92,7 +92,7 @@ fi
 
 # ---------------------------------------------------------------- 2. override
 echo
-echo "[2/4] /etc/kvmd/override.yaml"
+echo "[2/5] /etc/kvmd/override.yaml"
 
 # DO NOT CLOBBER SILENTLY. This step overwrites the live override.yaml with the
 # repo copy. If the device carries settings the repo copy lacks, that is a
@@ -133,7 +133,7 @@ fi
 
 # ---------------------------------------------------------------- 3. VNC
 echo
-echo "[3/4] VNC server (autostart via /etc/kvmd/user/scripts)"
+echo "[3/5] VNC server (autostart via /etc/kvmd/user/scripts)"
 $SSH 'mkdir -p /etc/kvmd/user/scripts'
 $SCP "$HERE/S99kvmd-vnc" "root@$IP:/etc/kvmd/user/scripts/"
 $SSH 'chmod +x /etc/kvmd/user/scripts/S99kvmd-vnc
@@ -148,7 +148,7 @@ $SSH 'netstat -ltn 2>/dev/null | grep -q ":5900"' \
 
 # ---------------------------------------------------------------- 4. patches
 echo
-echo "[4/4] patched kvmd modules"
+echo "[4/5] patched kvmd modules"
 # Everything under patches/ mirrors the site-packages tree. apply-module.sh
 # keeps the vendor .pyc as .pyc.orig the FIRST time only, so re-running this
 # whole script cannot lose the original or stack patches on patches.
@@ -169,10 +169,24 @@ if [ -d "$HERE/../patches" ]; then
         #
         # Iterate with read, not `for p in $PATCH_LIST` under a changed IFS —
         # that idiom breaks unquoted command expansion inside the loop body.
+        # Which firmware is this? patches/MANIFEST says which patches apply to
+        # which VERSION. After .15 moved from 1.8.1 to 1.10.0, two of the three
+        # patches became unnecessary (1.10.0 registers health itself), and
+        # applying them anyway would put .orig markers on modules that were
+        # never wrong. A patch absent from the manifest applies everywhere.
+        DEV_VERSION=$($SSH 'grep -E "^VERSION=" /etc/os-release | cut -d= -f2 | tr -d "\"\r\n"' 2>/dev/null || echo unknown)
+        echo "      firmware: $DEV_VERSION"
         printf '%s\n' "$PATCH_LIST" > "$TMPD/patchlist"
         while IFS= read -r p; do
             [ -n "$p" ] || continue
             rel=$(printf '%s' "$p" | sed 's|.*/patches/||')
+            glob=$(awk -v r="$rel" '$1 == r { print $2; exit }' "$HERE/../patches/MANIFEST" 2>/dev/null)
+            [ -n "$glob" ] || glob='*'
+            # shellcheck disable=SC2254  # the glob is meant to expand as a pattern
+            case "$DEV_VERSION" in
+                $glob) ;;
+                *) ok "skipped $rel (manifest: applies to $glob, not this firmware)"; continue ;;
+            esac
             # </dev/null is load-bearing: apply-module.sh runs ssh, ssh reads
             # stdin by default, and stdin here IS the patch list. Without it
             # the first module consumes the rest of the loop's input and the
@@ -199,6 +213,30 @@ if [ "$PATCHED" -gt 0 ]; then
     $SSH 'python3 -c "import kvmd" 2>/dev/null' \
         && ok "kvmd imports cleanly after restart" \
         || no "kvmd will not import — revert with: $HERE/apply-module.sh $IP <patch> --revert"
+fi
+
+# ---------------------------------------------------------------- 5. msd gadget
+echo
+echo "[5/5] mass-storage functions in the USB gadget"
+# Firmware 1.10.0 defaults otg.devices.msd.enabled to false, so kvmd-otg
+# creates mass_storage.0/.1 at boot but never links them into configs/b.1 and
+# /api/msd reports online: false. override.yaml carries the boot-time fix; this
+# links them NOW so the unit does not need a reboot to have virtual media.
+# kvmd-otgconf unbinds and rebinds the UDC to do it: the attached host sees a
+# brief USB re-enumeration, the same as plugging the cable.
+if $SSH 'command -v kvmd-otgconf >/dev/null 2>&1'; then
+    MISSING=$($SSH 'kvmd-otgconf --list-functions 2>/dev/null | awk "/^- mass_storage/{print \$2}"' | tr '\r\n' '  ')
+    if [ -n "$(printf '%s' "$MISSING" | tr -d ' ')" ]; then
+        # shellcheck disable=SC2086  # MISSING is a deliberate word list
+        $SSH "kvmd-otgconf --enable-function $MISSING >/dev/null 2>&1"
+        sleep 3
+        STILL=$($SSH 'kvmd-otgconf --list-functions 2>/dev/null | awk "/^- mass_storage/{print \$2}"' | tr -d '\r\n ')
+        [ -z "$STILL" ] && ok "enabled:$MISSING" || no "still disabled: $STILL"
+    else
+        ok "already linked into the gadget"
+    fi
+else
+    ok "no kvmd-otgconf on this firmware (1.8.1 links MSD by default)"
 fi
 
 $SSH sync

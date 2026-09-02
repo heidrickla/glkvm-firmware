@@ -207,26 +207,47 @@ Now that Prometheus works, three units on one board is a short job.
 
 ## Bigger, but the groundwork is done
 
-### Close the source/firmware gap — one flash away
-The device runs 1.8.1; the source we hold is 1.10.0; every module's bytecode
-differs, so every port needs a provenance check first. The provisioned 1.10.0
-image above is built and device-accepted; flashing it moves `.15` onto a base
-whose source we hold, and brings `recorder`, `serial`, `custom_screen` and
-`netbird` with it (all present in the 1.10.0 rootfs, measured). Even then the
-1.10.0 bytecode is not byte-identical to the published source — `health.pyc`
-is 7245 B on the image vs 7190 B compiled from source — so the provenance check
-stays.
+### ✅ Close the source/firmware gap — done, with a caveat
+`.15` now runs the provisioned 1.10.0, the base whose source we hold, with
+`recorder`, `serial`, `custom_screen` and `netbird` present. The caveat stands:
+1.10.0's bytecode is still not byte-identical to the published source
+(`health.pyc` 7245 B on the image vs 7190 B compiled), so the provenance check
+before any port stays — and `tools/firmware-diff.py` now makes the comparison
+against a *previous firmware* a one-command job for the next release.
 
-### ✅ Bake provisioning into firmware — built, verified, not flashed
+### ✅ Bake provisioning into firmware — built, verified, **and flashed onto `.15`**
 `tools/bake-image.sh` produces `firmware/glkvm-RM10-1.10.0-provisioned.img`:
 the vendor 1.10.0 rootfs with the classic UI, `override.yaml`, VNC autostart,
-the `export.py` patch, our SSH key and our signing key inside, plus the `.orig`
-files the revert tools expect. `.15`'s own `check_image_validity` says `Valid`
-and `fwtools verify` accepts our signature. **Flashing is a separate decision**
-— it wipes the overlay and the first flash needs `?skip_verify=true`.
+the `export.py` patch, tesseract, our SSH key and our signing key inside, plus
+the `.orig` files the revert tools expect. `tools/flash.sh` put it on `.15`
+(2026-09-01): back in ~30 s, SSH straight back on the baked key, everything up.
 
-The build walked into the RM1-rootfs trap once (see FINDINGS); two independent
+What the flash then taught (all in FINDINGS, found by **diffing the two
+firmwares** rather than chasing symptoms): 1.10.0 leaves the MSD gadget
+functions unlinked at boot (`otg.devices.msd.start_cdrom/start_flash` now in
+the override), ships a broken MSD remount default (override pins `remount,rw`),
+registers `health` itself (so `patches/MANIFEST` scopes two patches to 1.8.1),
+and its ustreamer will not capture without a live HDMI signal.
+
+The build walked into the RM1-rootfs trap once; two independent
 product-identity gates now stop it.
+
+### ✅ OCR — tesseract on the unit, `tools/ocr.sh`
+GL.iNet's 1.10.0 OCR is wired for an NPU `ocr_service` that ships in **no**
+firmware, so tesseract is the real path: Ubuntu noble's arm64 packages load
+as-is on the unit's glibc 2.41 (closure resolved from the package index by
+`ocr-fetch.py`, 23 packages, only missing sonames installed). Proven by
+reading "GLKVM 12345" off a device-rendered image, and the bridge's own
+"NO LIVE VIDEO" splash off a captured frame. `ocr.sh read` grabs a frame with a
+transient ustreamer on `/dev/video0` — on 1.10.0 that needs the attached host
+to actually be outputting video, which it was not during testing. Baked into
+the image; `/api/streamer/ocr` reports `engine: tesseract` natively on 1.10.0.
+
+### ✅ Firmware diff — `tools/firmware-diff.py`
+Compares two kvmd trees at the bytecode level and names what changed in each
+module (constants, names, functions that appeared or vanished), plus
+`/etc/kvmd`. Credential files are redacted by name — the first run was not,
+and cost a rotation. Report for 1.8.1 → 1.10.0 in `docs/`.
 
 ### Rewrite the vendor glue
 Surveyed in FINDINGS. 13 of the 36 GL.iNet-only files are pure Python; the KVM

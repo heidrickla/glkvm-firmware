@@ -1,0 +1,23 @@
+# patches/MANIFEST - which firmware each patched module applies to.
+#
+#   <path relative to patches/>    <glob matched against /etc/os-release VERSION>
+#
+# Read by tools/provision.sh (skips a patch the device does not need) and
+# tools/drift.sh (does not report such a patch as "reverted"). A patch missing
+# from this file is treated as applying everywhere.
+#
+# WHY THIS EXISTS. Two of the three patches exist only to register the health
+# submanager on firmware 1.8.1, which shipped health.pyc but never wired it up.
+# Firmware 1.10.0 registers it natively (proved by disassembling its
+# info/__init__.pyc: HealthInfoSubmanager is built with (state_poll)). After
+# .15 was flashed to 1.10.0, drift.sh reported both as "REVERTED to the vendor
+# module" and provision.sh would have re-applied them over code that did not
+# need them. The export.py fan bug is present on both, so that one is universal.
+#
+# VERSION strings seen so far:
+#   rm10rc-1.8.1-release1-6-gfa876ddece     (as shipped on the three units)
+#   rm10-1.10.0-beta1-3-gbe73e30c64         (the provisioned image)
+
+kvmd/apps/kvmd/api/export.py        *
+kvmd/apps/kvmd/info/__init__.py     rm10rc-1.8.*
+kvmd/apps/kvmd/info/health.py       rm10rc-1.8.*

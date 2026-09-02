@@ -1284,6 +1284,70 @@ the files executable) and reading which squares went red. `selftest.sh` now
 asserts the exec bit is set in git for every script, and that gate was watched
 firing in a scratch clone before it was committed.
 
+## `.15` is on 1.10.0 — the flash, and what the firmware diff says changed
+
+[measured] 2026-09-01. `tools/flash.sh 192.0.2.15 firmware/glkvm-RM10-1.10.0-provisioned.img`:
+upload → `POST /api/upgrade/start?skip_verify=true` → `updateEngine` wrote
+`parameter` + `recovery`, marked the misc partition, rebooted, applied the
+rootfs from recovery, rebooted again. **Back in ~30 s** running
+`rm10-1.10.0-beta1-3-gbe73e30c64` with `/etc/glkvm-bake.txt` present, our key
+installed, VNC hook present, tesseract loading, 905 MB of fresh overlay.
+`.15`'s address survived because it is a DHCP reservation, not overlay config.
+
+⚠ **Every checkpoint taken on 1.8.1 is now poison for this unit** — a 1.8.1
+`site-packages` under a 1.10.0 kvmd. Use `flashed-1.10.0-final-*` or later.
+
+### Diff first, then debug — `tools/firmware-diff.py`
+
+Four behaviours changed after the flash and each was chased one symptom at a
+time before Lewis asked the obvious question: *why not diff the two
+firmwares?* The 1.8.1 side is the pre-flash checkpoint (full bytecode tree +
+`/etc/kvmd`); the 1.10.0 side is the pristine rootfs. The tool compares `.pyc`
+bodies and, for each changed module, lists which constants, names and
+functions appeared or vanished — not a decompile, but enough to name every
+change. Full report: [docs/firmware-diff-1.8.1-to-1.10.0.md](docs/firmware-diff-1.8.1-to-1.10.0.md).
+
+**kvmd: 7 modules added, 0 removed, 50 changed, 172 identical.** Added:
+`api/serial`, `api/recorder`, `api/custom_screen`, `api/netbird`,
+`api/common`, and HID touch (`plugins/hid/otg/touch`, `otg/hid/touch`).
+
+| change on 1.10.0 | evidence in the diff | effect on us |
+| --- | --- | --- |
+| **MSD gadget functions unlinked at boot** | `apps/otg`: `+ start_cdrom`, `+ start_flash`; `apps/otgconf`: `+ __find_dwc3`, bind/unbind | `otg.devices.msd.start_cdrom/start_flash` default **false**; MSD `online: false` until set. Now in `override.yaml.example`; provision.sh links live via `kvmd-otgconf` |
+| **MSD remount default broken** | `plugins/msd/otg`: `+ _Plugin__remount_cmd`, `+ switch_partition`, `+ get_storage_root` | new code; default `remount,${mode}` never substitutes. GL.iNet also dropped the per-write RW remount, so a *correct* command leaves the media RO and writes die (`Errno 30`). Override pins `remount,rw` |
+| **Health registered natively** | `info/__init__`: `+ _unpack`, `- state_poll`; `health.pyc` byte-only change | the two 1.8.1-only patches are unnecessary — `patches/MANIFEST` now scopes them |
+| **OCR gains an NPU backend** | `ocr`: `+ _use_rknn`, `+ __rknn_recognize`, `rknn_socket`; `- libtesseract.so.3.0.5` → `_STATIC_LIBTESSERACT_PATHS` | `ocr_service` ships in **no** firmware; tesseract path is real and finds `.so.5` natively now |
+| **Capture requires a live HDMI signal** | `streamer`: `+ venc_mode`, `need_ustreamer=1 ignored: webrtc_client adaptive mode`; main.yaml `--venc-mode`, `pre_start_cmd` USR1/USR2 to `lt86102sxe_setup` | 1.8.1's ustreamer served the bridge splash; 1.10.0's waits for a signal. `ocr.sh read` says so |
+| **Password complexity + lockout counters** | `validators/auth`: `+ valid_new_passwd`, classes `[A-Z] [a-z] [0-9] [^A-Za-z0-9]`, 10–63; `auth`: `+ failed_since_last_success`, `+ refresh_token_expiry` | new passwords must carry all four classes — the rotation tooling enforces it |
+| **Touch HID** | `plugins/hid/otg`: `+ _send_touch_event`, hybrid/touch modes, `/dev/hidg3` | `hid.usb3` exists, disabled; kvmd logs `Missing HID-touch device: /dev/hidg3` at boot — harmless |
+| **nginx: TURN REST served by nginx** | vendor `nginx-kvmd.conf`: new `server { listen 127.0.0.1:8081 … /turnserver.json }` | replaces a resident Python process; no action |
+| **nginx: serial websocket, custom-screen upload** | `gl.ctx-server.conf`: `/api/serial/ws`, `/api/custom_screen/update_background`, `client_max_body_size 0` | the new features' plumbing |
+| `export.py` fan bug | `export`: `+ pikvm_fan`, `- get_subs` | **still present** — the patch stays universal |
+| `yamlconf/loader` | `+ __safe_merge`, "Skipping config file … due to parse error" | a broken override is now skipped with a warning rather than fatal — which is also why an unknown key (`otg.devices.msd.enabled`) was accepted silently |
+
+`/etc/kvmd` vendor-to-vendor: `override.yaml` unchanged; `main.yaml` gains
+`venc_mode`, the `lt86102sxe_setup` signal hooks and drops `h264_bitrate`
+10000 → 2000; `janus.plugin.ustreamer.jcfg` acap `hw:0,0` → `multi_hdmi_input`.
+
+### The credential leak in that diff
+
+The first run of the diff tool printed `/etc/kvmd/ipmipasswd` — which maps
+`admin:admin` onto the real KVMD admin password in plaintext — and the
+`htpasswd` hash. Nothing targeted a secret; a diff tool shows everything.
+Per the standing rule the credential was **rotated the same hour**: a new
+value meeting 1.10.0's complexity rules, written to the vault
+(`glkvm/KVMD-HT-PASSWORD`), applied and verified in both places by
+`tools/apply-vaulted-credential.sh --from-vault`. The tool now redacts
+credential files by name (`SECRET_PATHS`), and the committed report is the
+scrubbed one. The PowerShell applier, driven from Git Bash through `ob.ps1`,
+had its inner quotes stripped by the nested `powershell -File` and left the
+two places out of sync — hence the shell twin.
+
+Also true after any flash: the overlay wipe resets `htpasswd` to **GL.iNet's
+default admin credential** and `ipmipasswd` to `admin:admin -> admin:admin`.
+The image deliberately carries no secrets, so re-applying the vaulted
+credential is a post-flash step (auth is off, so it is not yet exercised).
+
 ## The 10 routes — status on `.15`
 
 | # | Route | Status | Note |
