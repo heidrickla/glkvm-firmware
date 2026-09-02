@@ -109,6 +109,32 @@ ipmi:
 #         type: tesmart
 #         host: 10.0.0.50
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# USB gadget: link the mass-storage functions into the gadget config at boot.
+#
+# Firmware 1.10.0 defaults BOTH of these to false. kvmd-otg then creates
+# mass_storage.0/.1 but never links them into configs/b.1, so
+# Drive.is_enabled() is false, /api/msd reports online: false, and every MSD
+# call fails -- while the storage partition sits mounted and healthy. 1.8.1
+# shipped them linked. Measured 2026-09-01 on .15 after the flash:
+# `kvmd-otgconf --list-functions` showed "- mass_storage.0 / - mass_storage.1".
+#
+# The keys are start_cdrom / start_flash. There is NO otg.devices.msd.enabled
+# -- a first version of this block set that, kvmd accepted the unknown key
+# without complaint, and nothing changed. GL.iNet's own toggle for these is
+# POST /api/system/otg_functions, which writes them to /etc/kvmd/user/boot.yaml.
+#
+# TOP-LEVEL key (a sibling of kvmd:), hence outside the kvmd: block below.
+# A live unit can be fixed without a reboot by
+#   kvmd-otgconf --enable-function mass_storage.0 mass_storage.1
+# which provision.sh does; these lines are what make it survive a reboot.
+# ---------------------------------------------------------------------------
+otg:
+    devices:
+        msd:
+            start_cdrom: true
+            start_flash: true
+
 # ###########################################################################
 # ##                                                                       ##
 # ##   AUTHENTICATION IS DISABLED BELOW. THIS IS DELIBERATE AND TEMPORARY. ##
@@ -142,6 +168,23 @@ ipmi:
 kvmd:
     auth:
         enabled: false
+
+    # MSD storage must stay READ-WRITE. Measured on 1.10.0, 2026-09-01:
+    #
+    # Upstream kvmd keeps the media partition RO and remounts RW around every
+    # write. GL.iNet removed the per-write RW remount ("eMMC does not need it")
+    # but kept the startup probe, which remounts RW then RO. Their shipped
+    # remount_cmd default is [/bin/mount, -o, "remount,${mode}"] -- the "$"
+    # survives str.format(), the command is invalid, the probe FAILS, and the
+    # media stays RW as the system mounted it. So writes work by accident.
+    #
+    # A first fix here made the command correct ({mode}), the probe then
+    # SUCCEEDED, the media was left RO, and every image write died with
+    # "[Errno 30] Read-only file system" in set_complete. Do not "fix" it that
+    # way again. Whatever mode the plugin asks for, remount RW: that is the
+    # state GL.iNet's write path assumes, on the eMMC they decided is safe.
+    msd:
+        remount_cmd: [/bin/mount, -o, "remount,rw", /userdata/media]
 
     gpio:
         drivers:

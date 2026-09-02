@@ -153,6 +153,40 @@ print("  ok   export.pyc asks InfoManager only for registered submanagers")
 PY
 ok "vendor export.pyc kept as .orig"
 
+# ---------------------------------------------------------------- 5b. tesseract
+echo ">> 5b. tesseract OCR runtime"
+if [ -s "$IN/ocr-payload.tar.gz" ]; then
+    # Same rule as tools/ocr.sh on a live unit: add only sonames the tree lacks,
+    # never overwrite a Buildroot library. The on-image manifest lets
+    # `ocr.sh remove` take exactly this out again after a flash.
+    OCRT="$BAKE/ocr-tmp"; rm -rf "$OCRT"; mkdir -p "$OCRT"
+    tar -xzf "$IN/ocr-payload.tar.gz" -C "$OCRT"
+    mkdir -p "$WORK/etc/kvmd/user" "$WORK/usr/share/tessdata"
+    OM="$WORK/etc/kvmd/user/ocr-installed.txt"; : > "$OM"
+    n=0
+    for f in "$OCRT"/lib/*; do
+        b=$(basename "$f")
+        if [ -e "$WORK/usr/lib/$b" ] || [ -e "$WORK/lib/$b" ]; then continue; fi
+        cp -a "$f" "$WORK/usr/lib/$b"; chown 0:0 "$WORK/usr/lib/$b" 2>/dev/null || true
+        echo "/usr/lib/$b" >> "$OM"; n=$((n + 1))
+    done
+    for f in "$OCRT"/tessdata/*; do
+        b=$(basename "$f")
+        cp "$f" "$WORK/usr/share/tessdata/$b"; chmod 644 "$WORK/usr/share/tessdata/$b"
+        echo "/usr/share/tessdata/$b" >> "$OM"; n=$((n + 1))
+    done
+    chmod 644 "$OM"; rm -rf "$OCRT"
+    [ -e "$WORK/usr/lib/libtesseract.so.5" ] || die "libtesseract.so.5 not in the tree after staging"
+    [ -s "$WORK/usr/share/tessdata/eng.traineddata" ] || die "eng.traineddata not in the tree"
+    # Cannot ctypes-load an aarch64 library on this x86 VM; the binary format
+    # can still be checked. This is what would catch an amd64 payload.
+    arch=$(readelf -h "$WORK/usr/lib/libtesseract.so.5" 2>/dev/null | awk -F': *' '/Machine/{print $2}')
+    [ "$arch" = "AArch64" ] || die "libtesseract.so.5 is '$arch', not AArch64"
+    ok "$n files staged (aarch64 ELF confirmed); manifest at /etc/kvmd/user/ocr-installed.txt"
+else
+    ok "no ocr-payload.tar.gz staged - image built without tesseract"
+fi
+
 # ---------------------------------------------------------------- 6. ssh key
 echo ">> 6. root authorized_keys"
 SSHD="$WORK/root/.ssh"

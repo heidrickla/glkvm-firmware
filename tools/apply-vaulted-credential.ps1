@@ -40,10 +40,26 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$DeviceIp,
-    [string]$KeyPath = "$PSScriptRoot\..\.ssh-glkvm\id_ed25519"
+    [string]$KeyPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
+
+# RUN THIS FROM POWERSHELL, NOT THROUGH GIT BASH. Invoked as
+#   bash -> powershell.exe -Command -> ob.ps1 -> powershell -File <this>
+# two things went wrong on 2026-09-01: $PSScriptRoot was empty (the key path
+# became "\..\.ssh-glkvm\id_ed25519"), and the double quotes inside the remote
+# here-string below were stripped in transit, so the verification Python
+# arrived as open(/etc/kvmd/user/htpasswd) and failed to parse -- AFTER the
+# htpasswd write and BEFORE the ipmipasswd write, leaving the two places out of
+# sync. From Git Bash use tools/apply-vaulted-credential.sh --from-vault, which
+# has a single shell layer. The key path below no longer depends on
+# $PSScriptRoot, and an empty one is a hard error rather than a relative guess.
+if (-not $KeyPath) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $KeyPath = Join-Path $scriptDir '..\.ssh-glkvm\id_ed25519'
+}
+if (-not (Test-Path $KeyPath)) { throw "ssh key not found at '$KeyPath' - pass -KeyPath explicitly" }
 
 if ($DeviceIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
     throw "'$DeviceIp' is not a bare IPv4 address (refusing hostnames - mDNS can hit the wrong unit)"

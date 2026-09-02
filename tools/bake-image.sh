@@ -137,12 +137,21 @@ tr -d '\r' < "$PATCH"                      > "$STAGE/in/export.py"
 tr -d '\r' < "$SSHPUB"                     > "$STAGE/in/authorized_keys"
 cp "$PUB" "$STAGE/in/signing.pub"
 
+# Tesseract goes in when the payload exists (tools/ocr.sh install --vm builds
+# it). Optional on purpose: an image without OCR is still a valid image, and
+# the remote side says plainly which it built.
+OCR_NOTE="no-tesseract"
+if [ -s "$ROOT/wheels/ocr-payload.tar.gz" ]; then
+    cp "$ROOT/wheels/ocr-payload.tar.gz" "$STAGE/in/ocr-payload.tar.gz"
+    OCR_NOTE="tesseract-5.3.4(+eng)"
+fi
+
 GITREV=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
 GITDIRTY=$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 {
     echo "glkvm-firmware bake $(date -u +%Y-%m-%dT%H:%M:%SZ) git=$GITREV dirty-files=$GITDIRTY"
     echo "base: $(basename "$VENDOR") sha256=$(sha256sum "$VENDOR" | cut -c1-16)"
-    echo "contents: signing-key classic-ui-8888 override.yaml vnc-autostart patch:api/export ssh-authorized-keys"
+    echo "contents: signing-key classic-ui-8888 override.yaml vnc-autostart patch:api/export ssh-authorized-keys $OCR_NOTE"
     echo "auth: kvmd.auth.enabled=false (deliberate, temporary - see override.yaml banner)"
     echo "revert: tools/deprovision.sh restores the .orig files shipped alongside"
 } > "$STAGE/in/manifest.txt"

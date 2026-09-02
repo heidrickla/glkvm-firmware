@@ -86,10 +86,23 @@ if [ -d "$HERE/../patches" ]; then
         # command line becomes a single argument, every call fails, and every
         # module reports "could not determine state" -- a convincing fake OTA
         # revert. read keeps IFS untouched.
+        # patches/MANIFEST says which firmware each patch applies to. Without
+        # it, a unit on 1.10.0 reports the two 1.8.1-only patches as "REVERTED"
+        # -- indistinguishable from a real OTA revert, which is the one thing
+        # this check exists to catch.
+        DEV_VERSION=$($SSH 'grep -E "^VERSION=" /etc/os-release | cut -d= -f2 | tr -d "\"\r\n"' 2>/dev/null || echo unknown)
+        note "firmware: $DEV_VERSION"
         printf '%s\n' "$PATCH_LIST" > "$TMPD/patchlist"
         while IFS= read -r p; do
             [ -n "$p" ] || continue
             rel=$(printf '%s' "$p" | sed 's|.*/patches/||')
+            glob=$(awk -v r="$rel" '$1 == r { print $2; exit }' "$HERE/../patches/MANIFEST" 2>/dev/null)
+            [ -n "$glob" ] || glob='*'
+            # shellcheck disable=SC2254  # the glob is meant to expand as a pattern
+            case "$DEV_VERSION" in
+                $glob) ;;
+                *) ok "$rel  (not applicable on this firmware; manifest: $glob)"; continue ;;
+            esac
             pyc="$SITE/${rel%.py}.pyc"
             # An OTA restores the vendor module AND removes our .orig marker,
             # so the marker's absence is the strongest single drift signal.
