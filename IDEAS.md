@@ -287,6 +287,12 @@ ustreamer's snapshot path at any resolution. TigerVNC on Windows decodes
 the H.264 only up to 1080p — measured by replaying the unit's stream and
 transcodes to it — so with a 1440p host it stays black.
 
+Open, hardware: a 4K30 host signal through the bridge. The capture path
+stops at 2560×1440, but GL.iNet's `E3840x2160` EDID preset says the bridge
+takes 4K30 in and scales it; `tools/edid.sh <ip> set E3840x2160` runs the
+test and `default` reverts. It re-plugs the host, so on a duplicated desktop
+the operator's own screen renegotiates — Lewis's call when to run it.
+
 ✅ Client side, done: TigerVNC's `H264WinDecoderContext.cxx` sized its
 decoded-frame buffer from a placeholder output type (1920×1088) and never
 grew it. `contrib/tigervnc-windows-h264/` has the patch and

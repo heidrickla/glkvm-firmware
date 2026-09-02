@@ -1554,6 +1554,37 @@ renders; live against `.15` with Auto select on, ~59 updates/s on the H.264
 memsink and zero ustreamer restarts; the installed copy in
 `%LOCALAPPDATA%\Programs\TigerVNC-h264` runs with only its own DLLs.
 
+### The resolution ceiling, and the EDID that sets it
+
+Lewis offered an 8K-capable monitor for tests. Measured instead of assumed:
+
+- **The capture path tops out at 2560×1440.** `v4l2-ctl --list-formats-ext`
+  on `/dev/video0` enumerates every format as `Stepwise 64x64 - 2560x1440`.
+  No EDID changes that; nothing above 1440p can ever leave the unit.
+- **The EDID the unit presents** (`/etc/kvmd/user/edid.txt`, 256 bytes, one
+  CEA block) has 2560×1440 @ 60 as its preferred timing, standard timings
+  down from 1920×1080, and CEA VICs 16/31/… — nothing above 1080p there.
+  Windows records the monitor as `GLKVM [GLI]` with that preferred mode,
+  which is why the host sits at 1440p60.
+- **GL.iNet ships 14 EDID presets** in `/etc/kvmd/edid.json`, including
+  `E3840x2160` "3840x2160/GLKVM/30Hz", 3440×1440/50, 2560×1600/50 and a
+  120 Hz 1080p. So the LT6911C-class bridge accepts 4K30 input and the
+  pipeline scales it to ≤ 1440p; the preset is a test of that scaling and
+  of the host's behaviour, never a 4K stream.
+- **How a switch is applied:** `POST /api/upgrade/edid` writes the hex to
+  `/tmp/edid.bin` and the user file, then runs a per-model command. The map
+  knows `rm10rc`, `rm4pe` and `rmq1`; this unit's model string is `rm10`, so
+  it falls to the default `lt6911c_upgrade -d /dev/i2c-1 -e /tmp/edid.bin`
+  plus a bridge reset via `/sys/bus/i2c/devices/1-002b/reset` — and that
+  *is* the right command here: `1-002b` exists, `lt6911c_upgrade` is
+  installed, and the `1-0058` device the `rm10rc` path expects is absent.
+  The host sees a hot-plug and renegotiates from the new EDID, so with a
+  duplicated desktop the operator's own screen changes mode too.
+- `tools/edid.sh <ip> list|get|set <key>|default` wraps all of that and
+  waits for the streamer's source to come back after the re-plug. Verified
+  read-only on `.15`; the 4K30 `set` waits for Lewis's go, since it flips
+  his working display.
+
 A lever not pulled: GL.iNet's ustreamer takes `--venc-format 0:h264 1:h265
 2:mjpeg`, so the RV1126 encoder *can* emit hardware MJPEG — that would feed
 the JPEG sink natively at 60 fps, but the H.264 sink would then be empty and
