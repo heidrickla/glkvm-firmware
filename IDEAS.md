@@ -218,6 +218,15 @@ everything else in the house. Lewis's `ha-glkvm` integration (sibling repo,
 built 2026-09-01) polls the kvmd API directly and stays read-only until he
 says otherwise.
 
+**Small vendor-bug candidate: `/api/info` `extras` logs an ERROR per call.**
+kvmd's extras submanager asks systemd over D-Bus for unit states; this
+firmware has no systemd, so every bare `GET /api/info` (and
+`?fields=extras`) logs `Can't open systemd bus to get extras state:
+DBusError` and still answers 200. Harmless, noisy, and a 30 s poller that
+asks for extras would bury the log. One-line patch candidate in
+`apps/kvmd/info/extras.py`: skip the D-Bus probe when it is absent. Until
+then: always request explicit fields (`?fields=health,system,meta`).
+
 ✅ Redfish `PowerState` was wrong on GL firmware (`glatx.py` hard-coded
 `leds` to false, Redfish maps `leds.power` → PowerState, so Off while the
 board said on). Fixed by `patches/kvmd/plugins/atx/glatx.py`, with the
