@@ -22,6 +22,11 @@
 # dump OFF a box with no network. The gadget has a second, normally idle LUN
 # (mass_storage.1/lun.0, ro=0 cdrom=0) for exactly this.
 #
+# `stick off` also sweeps what the host left on the storage root (Windows'
+# "System Volume Information", "$RECYCLE.BIN", desktop.ini, Thumbs.db, macOS'
+# .Trashes/.Spotlight-V100/.fseventsd) — kvmd would otherwise list them as
+# images to every client — and waits for kvmd's listing to catch up.
+#
 # ⚠ `stick on` UNMOUNTS /userdata/media on the KVM and exports the raw block
 # device. That is correct -- two writers on one filesystem corrupts it -- but it
 # means the ISO storage is GONE while the stick is connected: `list` shows no
@@ -182,6 +187,34 @@ do_stick() {
         off)
             call GET "$API/partition_disconnect" >/dev/null \
               || die "partition_disconnect failed"
+            # The host had the storage root as a drive. Windows leaves its
+            # indexer/recycle folders there, and kvmd then lists them as
+            # "images" to every client (seen 2026-09-02: "System Volume
+            # Information/IndexerVolumeGuid" in /api/msd). Wait for the
+            # remount, then sweep the usual suspects.
+            n=0
+            until call GET "$API" 2>/dev/null | grep -q '"images"'; do
+                sleep 2; n=$((n+1)); [ $n -ge 15 ] && break
+            done
+            here=$(cd "$(dirname "$0")" && pwd)
+            swept=$(ssh -n -i "$here/../.ssh-glkvm/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes \
+                        -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "root@$IP" \
+                        'cd /userdata/media 2>/dev/null || exit 0
+                         for j in "System Volume Information" "\$RECYCLE.BIN" desktop.ini Thumbs.db .Trashes .Spotlight-V100 .fseventsd; do
+                             [ -e "$j" ] || continue
+                             rm -rf -- "$j" && printf "%s\n" "$j"
+                         done' 2>/dev/null)
+            if [ -n "$swept" ]; then
+                echo "   swept host litter from the storage root:"
+                printf '%s\n' "$swept" | sed 's/^/      /'
+                # kvmd rescans the storage every few seconds; do not hand back
+                # a `list` that still shows what was just deleted.
+                first=$(printf '%s\n' "$swept" | head -1)
+                n=0
+                while call GET "$API" 2>/dev/null | grep -qF "$first"; do
+                    sleep 2; n=$((n+1)); [ $n -ge 15 ] && { echo "   (kvmd's image list has not caught up after 30 s)"; break; }
+                done
+            fi
             echo "   partition released and remounted; ISO storage is back"
             ;;
         *)  die "usage: stick on|off" ;;
