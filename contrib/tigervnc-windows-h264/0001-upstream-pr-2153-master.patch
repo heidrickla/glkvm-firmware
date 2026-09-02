@@ -1,0 +1,102 @@
+From 0b1501cf82269110895d71b1536d5e807fbd9942 Mon Sep 17 00:00:00 2001
+From: heidrickla <lewis.heidrick@gmail.com>
+Date: Tue, 1 Sep 2026 22:44:57 -0500
+Subject: [PATCH] Size the Windows H.264 decoded buffer for the actual stream
+
+H264WinDecoderContext allocated decoded_buffer once, in the constructor,
+from the decoder's placeholder output type. That is enough for 1920x1088
+but not for larger streams: with a 2560x1440 stream every ProcessOutput()
+returned E_FAIL, the drain loop had no case for that result, and the
+viewer showed a black window while updates kept arriving.
+
+Re-size the buffer when the decoder reports a stream change, replace the
+converter's output buffer on a stream change instead of adding a second
+one, log the two failures that were silently ignored, and stop retrying
+ProcessOutput() on an unexpected result.
+
+Verified with a replayed 2560x1440 High 5.0 stream (black before, renders
+after) and live 2560x1440@60 and 3840x2160@30 sessions against kvmd-vnc.
+---
+ common/rfb/H264WinDecoderContext.cxx | 39 ++++++++++++++++++++++++++--
+ 1 file changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/common/rfb/H264WinDecoderContext.cxx b/common/rfb/H264WinDecoderContext.cxx
+index ecfb4e5..17ddf47 100644
+--- a/common/rfb/H264WinDecoderContext.cxx
++++ b/common/rfb/H264WinDecoderContext.cxx
+@@ -31,11 +31,15 @@
+ 
+ #include <core/i18n.h>
+ 
++#include <core/LogWriter.h>
++
+ #include <rfb/PixelBuffer.h>
+ #include <rfb/H264WinDecoderContext.h>
+ 
+ using namespace rfb;
+ 
++static core::LogWriter vlog("H264WinDecoderContext");
++
+ // Older MinGW lacks this definition
+ #ifndef HAVE_VIDEO_PROCESSOR_MFT
+ static GUID CLSID_VideoProcessorMFT = { 0x88753b26, 0x5b24, 0x49bd, { 0xb2, 0xe7, 0xc, 0x44, 0x5c, 0x78, 0xc9, 0x82 } };
+@@ -161,9 +165,11 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+   // extract actual size, including possible cropping
+   ParseSPS(h264_buffer, len);
+ 
+-  if (FAILED(decoder->ProcessInput(0, input_sample, 0)))
++  HRESULT hr = decoder->ProcessInput(0, input_sample, 0);
++  if (FAILED(hr))
+   {
+-    // Silently ignore errors, hoping its a temporary encoding glitch
++    // Hopefully a temporary encoding glitch
++    vlog.debug("ProcessInput() failed: 0x%08lx", (unsigned long)hr);
+     return;
+   }
+ 
+@@ -274,6 +280,9 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+         MFT_OUTPUT_STREAM_INFO info;
+         converter->GetOutputStreamInfo(0, &info);
+ 
++        // Replace, not add, in case this is not the first stream change
++        converted_sample->RemoveAllBuffers();
++        SAFE_RELEASE(converted_buffer)
+         if (FAILED(MFCreateMemoryBuffer(info.cbSize, &converted_buffer)))
+         {
+           // Silently ignore errors, hoping its a temporary encoding glitch
+@@ -284,6 +293,32 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+         }
+       }
+       output_type->Release();
++
++      // decoded_buffer was sized from the placeholder output type in the
++      // constructor; the actual stream may need more (e.g. 2560x1440)
++      MFT_OUTPUT_STREAM_INFO decoder_info;
++      if (SUCCEEDED(decoder->GetOutputStreamInfo(0, &decoder_info)))
++      {
++        DWORD maxlen = 0;
++        decoded_buffer->GetMaxLength(&maxlen);
++        if (decoder_info.cbSize > maxlen)
++        {
++          IMFMediaBuffer* buffer;
++          if (SUCCEEDED(MFCreateMemoryBuffer(decoder_info.cbSize, &buffer)))
++          {
++            decoded_sample->RemoveAllBuffers();
++            decoded_buffer->Release();
++            decoded_buffer = buffer;
++            decoded_sample->AddBuffer(decoded_buffer);
++          }
++        }
++      }
++    }
++    else
++    {
++      // Bail out on anything else instead of retrying
++      vlog.error("ProcessOutput() failed: 0x%08lx", (unsigned long)hr);
++      break;
+     }
+   }
+ 
+-- 
+2.54.0.windows.1
+

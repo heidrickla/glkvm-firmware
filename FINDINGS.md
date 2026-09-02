@@ -1553,6 +1553,11 @@ ablated out: not needed. Verified: replay of the unit's 1440p stream
 renders; live against `.15` with Auto select on, ~59 updates/s on the H.264
 memsink and zero ustreamer restarts; the installed copy in
 `%LOCALAPPDATA%\Programs\TigerVNC-h264` runs with only its own DLLs.
+Sent upstream as [TigerVNC/tigervnc#2153](https://github.com/TigerVNC/tigervnc/pull/2153)
+(rebased on master; a logging build there pinned the failure to
+`ProcessOutput()` returning `E_FAIL` on every frame; master had already
+fixed the MinGW `closesocket` clash, and the coded-size limit code was
+left out after the ablation).
 
 ### The resolution ceiling, and the EDID that sets it
 
