@@ -13,9 +13,11 @@
 #   * our firmware signing public key   (vendor's kept as public.raw.glinet)
 #   * classic PiKVM UI server block on :8888
 #   * tools/override.yaml.example as /etc/kvmd/override.yaml  -- NOTE this
-#     carries kvmd.auth.enabled: false; see the banner in that file
+#     carries kvmd.auth.enabled: false (see the banner in that file) and
+#     kvmd.streamer.forever: true (kvmd's own streamer permanently on)
 #   * VNC autostart via /etc/kvmd/user/scripts (the only hook that runs)
-#   * patches/kvmd/apps/kvmd/api/export.py, compiled to 3.12 bytecode
+#   * every patch under patches/ that MANIFEST scopes to this firmware,
+#     compiled to 3.12 bytecode
 #   * our SSH public key in /root/.ssh/authorized_keys
 #   * /etc/glkvm-bake.txt recording what was baked, from which git revision
 #   * the .orig backups deprovision.sh and apply-module.sh --revert expect
@@ -163,8 +165,9 @@ GITDIRTY=$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 {
     echo "glkvm-firmware bake $(date -u +%Y-%m-%dT%H:%M:%SZ) git=$GITREV dirty-files=$GITDIRTY"
     echo "base: $(basename "$VENDOR") sha256=$(sha256sum "$VENDOR" | cut -c1-16)"
-    echo "contents: signing-key classic-ui-8888 override.yaml vnc-autostart patch:api/export ssh-authorized-keys $OCR_NOTE"
+    echo "contents: signing-key classic-ui-8888 override.yaml streamer-forever vnc-autostart patches:MANIFEST ssh-authorized-keys $OCR_NOTE"
     echo "auth: kvmd.auth.enabled=false (deliberate, temporary - see override.yaml banner)"
+    echo "streamer: kvmd.streamer.forever=true (default since 2026-09-01)"
     echo "revert: tools/deprovision.sh restores the .orig files shipped alongside"
 } > "$STAGE/in/manifest.txt"
 cp "$HERE/bake-image.remote.sh" "$STAGE/bake-image.remote.sh"
