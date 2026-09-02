@@ -253,8 +253,21 @@ as-is on the unit's glibc 2.41 (closure resolved from the package index by
 reading "GLKVM 12345" off a device-rendered image, and the bridge's own
 "NO LIVE VIDEO" splash off a captured frame. `ocr.sh read` grabs a frame with a
 transient ustreamer on `/dev/video0` — on 1.10.0 that needs the attached host
-to actually be outputting video, which it was not during testing. Baked into
-the image; `/api/streamer/ocr` reports `engine: tesseract` natively on 1.10.0.
+to actually be outputting video. With HDMI in connected (the host's secondary
+monitor, 2560×1440@60) it read the desktop's app text. Baked into the image.
+
+kvmd's **own** OCR endpoint (`/api/streamer/snapshot?ocr=1`) was broken on
+1.10.0 by a vendor bug — a dropped `@contextlib.contextmanager` — fixed by
+`patches/kvmd/apps/kvmd/ocr.py` (1.10.x only, manifest-scoped, baked): 200
+with the screen's text, given a running streamer.
+
+### HID — proven to reach the host, with one operational lesson
+After a gadget rebuild the host had stopped polling the HID endpoints while
+kvmd kept accepting events with 200s; `kvmd-otgconf --reset-gadget` fixed it,
+and kvmd's `online` flag only updates on the next successful write. Keyboard
+and both mouse outputs now deliver. Reading typed text back through OCR needs
+the text to land on the captured (secondary) monitor — Windows keeps Start and
+the pointer on the primary — so that loop waits on a desktop choice.
 
 ### ✅ Firmware diff — `tools/firmware-diff.py`
 Compares two kvmd trees at the bytecode level and names what changed in each

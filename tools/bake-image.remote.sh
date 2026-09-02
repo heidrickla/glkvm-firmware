@@ -48,7 +48,7 @@ ok()  { printf '  ok   %s\n' "$*"; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (file ownership inside the image)"
 [ -d "$PRISTINE/etc/kvmd" ] || die "no pristine rootfs at $PRISTINE"
-for f in uncomment-8888.awk override.yaml S99kvmd-vnc export.py authorized_keys signing.pub manifest.txt; do
+for f in uncomment-8888.awk override.yaml S99kvmd-vnc patches/MANIFEST patches/kvmd/apps/kvmd/api/export.py authorized_keys signing.pub manifest.txt; do
     [ -s "$IN/$f" ] || die "missing or empty input: $IN/$f"
 done
 command -v mksquashfs >/dev/null 2>&1 || die "mksquashfs not installed"
@@ -122,24 +122,39 @@ head -c 2 "$US/S99kvmd-vnc" | grep -q '#!' || die "S99kvmd-vnc has no shebang"
 ! grep -q "$(printf '\r')" "$US/S99kvmd-vnc" || die "S99kvmd-vnc has CRLF line endings - busybox would fail to exec it"
 ok "S99kvmd-vnc installed (755, LF); vnc.enable present"
 
-# ---------------------------------------------------------------- 5. export.py
-echo ">> 5. patched kvmd/apps/kvmd/api/export"
-PYC="$WORK/usr/lib/python3.12/site-packages/kvmd/apps/kvmd/api/export.pyc"
-[ -f "$PYC" ] || die "$PYC absent"
-python3 - "$IN/export.py" "$BAKE/export.pyc.new" <<'PY'
+# ---------------------------------------------------------------- 5. patches
+echo ">> 5. patched kvmd modules (every patch the manifest says applies to this image)"
+IMG_FW=$(sed -n 's/^VERSION=//p' "$WORK/etc/os-release" | tr -d '"' | head -1)
+[ -n "$IMG_FW" ] || die "cannot read VERSION from the image's /etc/os-release"
+echo "  image firmware: $IMG_FW"
+[ -s "$IN/patches/MANIFEST" ] || die "no patches/MANIFEST staged"
+applied=0
+find "$IN/patches" -name '*.py' -type f | sort > "$BAKE/patchlist"
+while IFS= read -r src; do
+    rel=${src#"$IN/patches/"}
+    glob=$(awk -v r="$rel" '$1 == r { print $2; exit }' "$IN/patches/MANIFEST")
+    [ -n "$glob" ] || glob='*'
+    # shellcheck disable=SC2254  # the manifest glob is meant to expand as a pattern
+    case "$IMG_FW" in
+        $glob) ;;
+        *) echo "  --   $rel: manifest says $glob, not this image - skipped"; continue ;;
+    esac
+    PYC="$WORK/usr/lib/python3.12/site-packages/${rel%.py}.pyc"
+    [ -f "$PYC" ] || die "$rel: vendor module absent at $PYC"
+    python3 - "$src" "$BAKE/patch.pyc.new" <<'PY'
 import py_compile, sys
 py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)
 PY
-magic=$(head -c 4 "$BAKE/export.pyc.new" | od -An -tx1 | tr -d ' \n')
-[ "$magic" = "$PYC_MAGIC_312" ] \
-    || die "compiled bytecode magic is $magic, not 3.12's $PYC_MAGIC_312 - wrong python on this VM"
-[ -f "$PYC.orig" ] || cp -p "$PYC" "$PYC.orig"
-cp "$BAKE/export.pyc.new" "$PYC"
-chmod 644 "$PYC"
-rm -f "$BAKE/export.pyc.new"
-! cmp -s "$PYC" "$PYC.orig" || die "export.pyc unchanged after patch"
-# The whole point of the patch: it must no longer hard-code a request for 'fan'.
-python3 - "$PYC" <<'PY'
+    magic=$(head -c 4 "$BAKE/patch.pyc.new" | od -An -tx1 | tr -d ' \n')
+    [ "$magic" = "$PYC_MAGIC_312" ] \
+        || die "$rel: compiled bytecode magic is $magic, not 3.12's $PYC_MAGIC_312 - wrong python on this VM"
+    [ -f "$PYC.orig" ] || cp -p "$PYC" "$PYC.orig"
+    cp "$BAKE/patch.pyc.new" "$PYC"; chmod 644 "$PYC"; rm -f "$BAKE/patch.pyc.new"
+    ! cmp -s "$PYC" "$PYC.orig" || die "$rel: .pyc unchanged after patch"
+    case "$rel" in
+        kvmd/apps/kvmd/api/export.py)
+            # The whole point of that patch: no hard-coded request for 'fan'.
+            python3 - "$PYC" <<'PY'
 import marshal, sys, types
 code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
 def walk(c):
@@ -149,9 +164,23 @@ def walk(c):
             yield from walk(k)
 gp = next(c for c in walk(code) if c.co_name == "__get_prometheus_metrics")
 assert "get_subs" in gp.co_names, "patched export.pyc does not call get_subs() - wrong source?"
-print("  ok   export.pyc asks InfoManager only for registered submanagers")
 PY
-ok "vendor export.pyc kept as .orig"
+            ;;
+        kvmd/apps/kvmd/ocr.py)
+            # The whole point of that patch: _tess_api is a context manager again.
+            python3 - "$PYC" <<'PY'
+import marshal, sys
+code = marshal.loads(open(sys.argv[1], "rb").read()[16:])
+assert "contextmanager" in code.co_names, "patched ocr.pyc has no contextmanager - wrong source?"
+PY
+            ;;
+    esac
+    ok "$rel installed; vendor kept as .pyc.orig"
+    applied=$((applied + 1))
+done < "$BAKE/patchlist"
+rm -f "$BAKE/patchlist"
+[ "$applied" -ge 1 ] || die "no patch applied - export.py at least must apply to every firmware"
+ok "$applied patch(es) applied"
 
 # ---------------------------------------------------------------- 5b. tesseract
 echo ">> 5b. tesseract OCR runtime"

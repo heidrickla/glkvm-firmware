@@ -1375,6 +1375,50 @@ key earlier: `override.yaml` mistakes do not error. `selftest.sh` now refuses
 an example with duplicate top-level keys, and `verify-gates.sh` proves that
 check fires.
 
+### With HDMI in connected: the streamer, kvmd's own OCR, and HID — all measured
+
+The attached host is a Windows 11 workstation whose **secondary** monitor feeds
+`.15`'s HDMI in (2560×1440@60). Everything below was measured against that.
+
+**`kvmd.streamer.forever: true`** (inside the `kvmd:` block): kvmd's ustreamer
+runs at 2560×1440, 60 captured fps; `:8888/streamer/snapshot` returns a 138 KB
+JPEG of the desktop — the classic UI has its picture; janus attaches to the
+h264 memsink; `gl_kvm_gui` and janus stay up; load ~9.3. It is **left on the
+unit for Lewis's acceptance tests and is not in `override.yaml.example`** — so
+`provision.sh` will refuse to overwrite until that is decided (`--force`, or
+add the line to the example).
+
+**kvmd's own OCR endpoint had a vendor bug.** `GET /api/streamer/snapshot?ocr=1`
+returned 500: `TypeError: 'generator' object does not support the context
+manager protocol` — 1.10.0 dropped `@contextlib.contextmanager` from
+`_tess_api()` when the RKNN backend was added (the firmware diff shows
+`contextmanager` vanishing from `ocr.pyc`), and the NPU service it was meant to
+be replaced by ships in no firmware. `patches/kvmd/apps/kvmd/ocr.py` restores
+the decorator, nothing else; provenance checked (structure identical to the
+device's bytecode; `_tess_api` compiled with `CO_GENERATOR`). Patched: **200**,
+629 characters of the secondary monitor's text. Scoped to `rm10-1.10.*` in the
+manifest.
+
+**HID.** kvmd reported `keyboard.online=false, mouse.online=false` while every
+`send_key`/`print` call returned 200 — kvmd queues events regardless. The
+plugin log showed `HID-keyboard is busy/unplugged (write select)` from
+**06:31 device time, 32 minutes after boot** — during the streamer experiments'
+kvmd restarts, not at the flash — and a zero-length keyboard report to
+`/dev/hidg0` never became writable: the host had stopped polling the HID
+endpoints while the gadget stayed `configured`. `kvmd-otgconf --reset-gadget`
+(a virtual replug) restored it; the `online` flag is **lazy** and only flips
+back on the next successful write, so a harmless `ShiftLeft` press/release
+turned the keyboard online and a relative-mouse move turned the mouse online.
+After the reset all three HID endpoints are polled. Everything typed *before*
+the reset never reached the host.
+
+**Reading typed text back is blocked by geometry, not by the tools.** Windows
+opens Start on the monitor holding the pointer and keeps the pointer on the
+primary; the capture sees the secondary. Sweeping the pointer ±10 000 px with
+the relative mouse never put it on the captured display. To close the loop,
+either the pointer (and hence Start) has to be on the secondary monitor, or a
+text field has to be open there — both are choices about Lewis's desktop.
+
 ### The credential leak in that diff
 
 The first run of the diff tool printed `/etc/kvmd/ipmipasswd` — which maps
