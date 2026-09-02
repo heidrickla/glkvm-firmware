@@ -23,4 +23,4 @@
 #     Signed with .signing-key/glkvm-signing.priv; verified on-device:
 #     check_image_validity -> Valid, fwtools verify (our key) -> Signature: OK
 56609c420cd23a00a47b7fa6d3022462779d3f2bde1057ee44289860a1374fca *glkvm-RM10-1.10.0-custom-signed.img
-22a32f74f0ec6fe4fddfef82bee6eb5cf587e2bda5f4284b37186ee47495291f  glkvm-RM10-1.10.0-provisioned.img
+093a2dce6df56c594ec71ba2260d2740caf6a21f6f860d5855e628453e1f1b02  glkvm-RM10-1.10.0-provisioned.img
