@@ -1465,8 +1465,11 @@ authorisation for everything but ATX; verified here read-only afterwards):
   storage root itself. Windows wrote `System Volume Information/` into
   `/userdata/media` during yesterday's stick test, and kvmd then listed
   `System Volume Information/IndexerVolumeGuid` as an "image" to every
-  client, HA included. Removed by hand; expect it back after any stick
-  session with a Windows host.
+  client, HA included. `msd.sh stick off` now sweeps the usual Windows and
+  macOS litter from the storage root after the remount and waits for
+  kvmd's listing (which rescans every few seconds) to catch up — verified
+  with a stick round trip against the Windows host: the folder came back,
+  the sweep removed it, `list` was clean.
 
 **kvmd's own OCR endpoint had a vendor bug.** `GET /api/streamer/snapshot?ocr=1`
 returned 500: `TypeError: 'generator' object does not support the context
