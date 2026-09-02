@@ -1399,9 +1399,23 @@ firmware; after that the picture is shared. The remaining case is the UI's
 starting `webrtc_client`, and the stream controller computes
 `internal_need = (... or stream_forever) and not adaptive_mode`, so `forever`
 is masked while adaptive mode is on and the full restart path runs on exit.
-GL.iNet wrote the `stream_forever` term into that expression themselves. The
-Mode selector lives in the UI's video settings; entry and exit have been read
-in the source, not yet watched live.
+GL.iNet wrote the `stream_forever` term into that expression themselves.
+
+**Watched live, 2026-09-01.** Lewis switched the UI's Mode through every
+option and back to WebRTC. From `kvmd.log` (device time):
+
+| | |
+| --- | --- |
+| 07:36:30.9 | `Entering adaptive mode` → `/tmp/kvmd_janus_disable` written → `Stopping streamer immediately` |
+| 07:36:31.9 | janus SIGTERM, exited on its own; `webrtc_client` started at :32.4 |
+| 07:36:30–:48 | **no** `Started streamer` line — `forever` stayed masked for the whole adaptive window; no fight, no `Unexpected streamer error` |
+| 07:36:48.3 | `Exiting adaptive mode` → `webrtc_client` stopped → flag removed at :48.7 → kvmd's ustreamer back at :49.0 (0.3 s later) |
+| 07:36:57, 07:37:13 | Direct H.264 and FlexFEC: one 0.9 s parameter restart each, same as vendor firmware would do |
+
+Afterwards: one ustreamer, janus restarted (new pid), `gl-pion` attached,
+`kvmd_janus_disable` gone, source online at 2560×1440/60, load unchanged. The
+only warning in the window was `webrtc_client`'s own `netlink bind failed`,
+which is its logging, not ours. The default holds in every mode the UI offers.
 
 **kvmd's own OCR endpoint had a vendor bug.** `GET /api/streamer/snapshot?ocr=1`
 returned 500: `TypeError: 'generator' object does not support the context
