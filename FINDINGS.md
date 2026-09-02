@@ -1542,6 +1542,14 @@ TigerVNC's use of it — most likely the unset
 `CODECAPI_AVDecVideoMaxCodedWidth/Height` — and a client-side fix. Linux
 TigerVNC uses FFmpeg and has no such limit (not measured here).
 
+A lever not pulled: GL.iNet's ustreamer takes `--venc-format 0:h264 1:h265
+2:mjpeg`, so the RV1126 encoder *can* emit hardware MJPEG — that would feed
+the JPEG sink natively at 60 fps, but the H.264 sink would then be empty and
+the Vue UI's WebRTC picture gone with it. Not a default; possibly a
+per-session mode if a JPEG-only viewer ever has to be smooth. Also: `-r` is
+only the *initial* resolution — the capture follows the host's output, so
+there is no server-side way to hand a 1440p host to a 1080p-only decoder.
+
 Facts for users: port **5900**; H.264 needs the video format set to H.264
 in the UI (the H.265 radio makes the sink HEVC, which no VNC client can
 carry — kvmd-vnc then falls back to JPEG); TigerVNC ≥ 1.13 is the only
