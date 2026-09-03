@@ -1437,6 +1437,18 @@ Afterwards: one ustreamer, janus restarted (new pid), `gl-pion` attached,
 only warning in the window was `webrtc_client`'s own `netlink bind failed`,
 which is its logging, not ours. The default holds in every mode the UI offers.
 
+**What `ha-glkvm` depends on from this repo: nothing in code, two settings
+in behaviour** (read from its source 2026-09-02). It uses stock kvmd and
+GL.iNet endpoints on `https://<host>` with stateless `X-KVMD-User/Passwd`
+headers, and none of the six patched modules is on any path it calls
+(no Redfish, no OCR, no VNC, no :8888, no Prometheus export). On stock
+1.10.0: the camera gets 503 except while GL's own UI is watching — the
+integration treats that as "no image" — and virtual media is `online:
+false` until USB functions are enabled in GL's UI. Our override supplies
+both (`streamer.forever: true`, `otg.devices.msd.start_*`); neither needs
+the custom image, only `override.yaml` or GL's own toggle. Auth: stock
+needs the credential, which its config flow takes.
+
 **More of the HID, MSD, GPIO and WoL surface exercised, 2026-09-02** (by the
 ha-management session while testing `ha-glkvm`, with Lewis's
 authorisation for everything but ATX; verified here read-only afterwards):
