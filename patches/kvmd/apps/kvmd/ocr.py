@@ -39,6 +39,14 @@
 # `contextmanager` among them, and _tess_api compiled with CO_GENERATOR set.
 # This file is that source plus the missing decorator, nothing else.
 #
+# Second change, 2026-09-08: the tesseract handle is created and initialised
+# ONCE per language set and reused under a lock (see Ocr.__init__). The
+# vendor's create/Init3/delete per call ran in worker threads and left each
+# thread's malloc arena holding the language data: kvmd's main process grew
+# ~3.5 MB per OCR call without bound. Measured red (+70 MB per 20 calls) and
+# green (flat) with tools/memcheck.sh. _tess_api() is kept for provenance
+# and is no longer called.
+#
 # Apply with: tools/apply-module.sh <ip> patches/kvmd/apps/kvmd/ocr.py
 # ---------------------------------------------------------------------------
 
@@ -51,6 +59,7 @@ import struct
 import ctypes
 import ctypes.util
 import contextlib
+import threading
 import warnings
 
 from ctypes import POINTER
@@ -70,6 +79,19 @@ from PIL import Image as PilImage
 from ...errors import OperationError
 
 from ... import libc
+
+# LOCAL PATCH: cap glibc's malloc arenas for this process. kvmd runs OCR and
+# other blocking work in a thread pool; glibc gives each thread its own arena
+# and never hands those back, so every worker that has decoded a 2560x1440
+# frame keeps ~15 MB. Measured 2026-09-08 on .13 with 8 worker threads: the
+# OCR path settled at +127 MB with the default arenas and +33 MB with two,
+# at the same speed. This runs at import, before the pool creates threads.
+# M_ARENA_MAX is -8 in glibc's malloc.h. (kvmd's libc module wraps a private
+# CDLL and exposes no mallopt, so open libc directly.)
+try:
+    ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6").mallopt(-8, 2)
+except Exception:  # pylint: disable=broad-except
+    pass
 from ... import aiotools
 
 # Fallback paths for libtesseract when ctypes.util.find_library fails
@@ -108,6 +130,7 @@ def _load_libtesseract() -> (ctypes.CDLL | None):
         for (name, restype, argtypes) in [
             ("TessBaseAPICreate", POINTER(_TessBaseAPI), []),
             ("TessBaseAPIDelete", None, [POINTER(_TessBaseAPI)]),
+            ("TessBaseAPIClear", None, [POINTER(_TessBaseAPI)]),  # LOCAL PATCH: reused handle
             ("TessBaseAPIInit3", c_int, [POINTER(_TessBaseAPI), c_char_p, c_char_p]),
             ("TessBaseAPISetImage", None, [POINTER(_TessBaseAPI), c_void_p, c_int, c_int, c_int, c_int]),
             ("TessBaseAPIGetUTF8Text", POINTER(c_char), [POINTER(_TessBaseAPI)]),
@@ -215,6 +238,14 @@ class Ocr:
         self.__default_langs = default_langs
         self.__rknn_socket = rknn_socket
         self.__notifier = aiotools.AioNotifier()
+        # LOCAL PATCH: one initialised tesseract handle per language set,
+        # reused under a lock (the API is not thread-safe). Creating, Init3-ing
+        # and deleting one per call from aiotools' worker threads left each
+        # thread's malloc arena holding a copy of the language data: kvmd grew
+        # ~3.5 MB per OCR call, 59 -> 285 MB measured on 2026-09-08, and
+        # every call paid ~0.6 s of Init. Reused: flat, ~0.1 s.
+        self.__tess_lock = threading.Lock()
+        self.__tess_apis: dict[tuple[str, ...], _TessBaseAPI] = {}
 
     def _use_rknn(self) -> bool:
         """若 rknn_socket 已配置且 socket 文件存在则使用 RKNN 模式"""
@@ -293,8 +324,31 @@ class Ocr:
 
     # ── Tesseract path ─────────────────────────────────────────────────────
 
+    def __tess_get(self, langs: list[str]) -> _TessBaseAPI:
+        # LOCAL PATCH: called with __tess_lock held
+        assert _libtess
+        key = tuple(langs)
+        api = self.__tess_apis.get(key)
+        if api is None:
+            api = _libtess.TessBaseAPICreate()
+            if _libtess.TessBaseAPIInit3(api, self.__data_dir_path.encode(), "+".join(langs).encode()) != 0:
+                _libtess.TessBaseAPIDelete(api)
+                raise OcrError("Can't initialize Tesseract")
+            self.__tess_apis[key] = api
+        return api
+
     def __tess_recognize(self, data: bytes, langs: list[str], left: int, top: int, right: int, bottom: int) -> str:
-        with _tess_api(self.__data_dir_path, langs) as api:
+        # LOCAL PATCH: reuse the handle instead of `with _tess_api(...) as api`
+        with self.__tess_lock:
+            assert _libtess
+            api = self.__tess_get(langs)
+            try:
+                return self.__tess_recognize_with(api, data, left, top, right, bottom)
+            finally:
+                _libtess.TessBaseAPIClear(api)
+
+    def __tess_recognize_with(self, api: _TessBaseAPI, data: bytes, left: int, top: int, right: int, bottom: int) -> str:
+        if True:  # keeps the vendor body below unchanged
             assert _libtess
             with io.BytesIO(data) as bio:
                 image = PilImage.open(bio)

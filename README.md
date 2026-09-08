@@ -148,6 +148,7 @@ tools/
   bake-image.sh (+ .remote.sh)     build a signed image with provisioning inside
   flash.sh                         flash a unit with it (irreversible; wipes the overlay); --from-vault for a stock unit, --check to prove the login first
   S24glkvm-config                  baked init script: re-applies our override, SSH key and VNC hook after GL.iNet's first-boot config restore
+  memcheck.sh                      drive the VNC, snapshot, OCR and bitrate paths and watch each process's RSS for growth
   firmware-diff.py                 what changed between two firmwares, module by module
   ocr.sh / ocr-fetch.py            tesseract on the unit; read the attached host's screen
   vnc-probe.py / vnc-churn.py      what kvmd-vnc really sends; TigerVNC's re-negotiation storm
