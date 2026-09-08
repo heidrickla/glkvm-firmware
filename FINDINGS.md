@@ -1967,9 +1967,16 @@ server, not just an open socket.
 
 ### De-cloud — already done on this unit
 
-`/etc/glinet/gl-cloud.conf` reads `"enable": false` (with a stale `token` and
-`uuid` from a previous binding), and neither `gl-cloud` nor `rtty` is running.
-Nothing to change. Note `tailscaled` **is** running (100.64.0.62).
+`/etc/glinet/gl-cloud.conf` reads `"enable": false`, and neither `gl-cloud`
+nor `rtty` is running. It carried a stale `token` and `uuid` from a previous
+binding until 2026-09-08 [measured]: the pair was removed (`jq 'del(.token,
+.uuid)'`; the file is the stock two-key shape again, 45 bytes) together with
+the `/userdata/gl-cloud.conf.bak-*` copy, after both were pulled into
+`backups/` (gitignored) and hash-checked. Nothing under `/etc`, `/userdata` or
+`/root` holds a `"token"` key now. That invalidates the pair on the unit only;
+the cloud side forgets a binding through `POST /api/astrowarp/unbind` with the
+daemon running, or from the GoodCloud account [source, `api/astrowarp.py`].
+Note `tailscaled` **is** running (100.64.0.62).
 
 ### Two bugs in my init script, found only by running it
 
