@@ -4,9 +4,11 @@
 #   ./tools/flash.sh <device-ip> firmware/glkvm-RM10-1.10.0-provisioned.img [--from-vault] [--check]
 #
 #   --from-vault  a STOCK unit: kvmd auth is on and it has none of our keys.
-#                 Pulls KVMD-HT-USER / KVMD-HT-PASSWORD from OpenBao (must be
-#                 THIS unit's login), sends them as headers, and installs our
-#                 SSH key through the unit's own API before the preflight.
+#                 Pulls the login from OpenBao project glkvm -- per-unit names
+#                 first (KVMD-HT-USER-13 / KVMD-HT-PASSWORD-13 for
+#                 192.0.2.13), then the shared KVMD-HT-USER / KVMD-HT-PASSWORD
+#                 (.15's) -- sends it as headers, and installs our SSH key
+#                 through the unit's own API before the preflight.
 #   --check       stop after proving the login and reporting whether a shell
 #                 exists; changes nothing on the unit.
 #
@@ -79,12 +81,19 @@ trap 'rm -f "$CURLCFG"' EXIT INT TERM
 HAVE_CREDS=no
 if [ "$FROM_VAULT" = "yes" ]; then
     vget() { ssh -n -o BatchMode=yes -o ConnectTimeout=10 claude@192.0.2.161 "sudo openbao-get glkvm $1" 2>/dev/null; }
-    u=$(vget KVMD-HT-USER | tr -d '\r\n'); p=$(vget KVMD-HT-PASSWORD | tr -d '\r\n')
-    [ -n "$u" ] && [ -n "$p" ] || die "vault returned an empty KVMD-HT-USER or KVMD-HT-PASSWORD"
+    # Per-unit names first (KVMD-HT-USER-13 for 192.0.2.13), then the shared
+    # pair, which is .15's login. Only the NAME that matched is printed.
+    octet=${IP##*.}
+    u=""; p=""; used=""
+    for suffix in "-$octet" ""; do
+        u=$(vget "KVMD-HT-USER$suffix" | tr -d '\r\n'); p=$(vget "KVMD-HT-PASSWORD$suffix" | tr -d '\r\n')
+        if [ -n "$u" ] && [ -n "$p" ]; then used="KVMD-HT-USER$suffix / KVMD-HT-PASSWORD$suffix"; break; fi
+    done
+    [ -n "$used" ] || die "vault has neither KVMD-HT-USER-$octet/KVMD-HT-PASSWORD-$octet nor the shared KVMD-HT-USER/KVMD-HT-PASSWORD"
     printf 'header = "X-KVMD-User: %s"\nheader = "X-KVMD-Passwd: %s"\n' "$u" "$p" > "$CURLCFG"
     unset u p
     HAVE_CREDS=yes
-    ok "credential loaded from the vault (user length $(sed -n 's/^header = "X-KVMD-User: \(.*\)"$/\1/p' "$CURLCFG" | tr -d '\n' | wc -c | tr -d ' '))"
+    ok "credential loaded from the vault: $used"
 fi
 hcurl() { curl -sk -K "$CURLCFG" "$@"; }
 
