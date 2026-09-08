@@ -104,6 +104,17 @@ expect_fail "override.yaml.example loses kvmd.streamer.forever" \
 expect_fail "override.yaml.example gains a second top-level kvmd: block" \
     sh -c 'printf "\nkvmd:\n    streamer:\n        forever: true\n" >> "$1"' _ "$WORK/tools/override.yaml.example"
 
+# A commit with a Co-Authored-By trailer must be refused. The copy has no
+# .git, so point selftest at a throwaway repo holding one such commit.
+inject_trailer_commit() {
+    rm -rf "$WORK/trailer-repo"
+    git init -q "$WORK/trailer-repo" \
+        && git -C "$WORK/trailer-repo" -c user.name=t -c user.email=t@t commit -q --allow-empty \
+               -m "Some change" -m "Co-Authored-By: Someone <x@y>" \
+        && printf '%s\n' "$WORK/trailer-repo" > "$WORK/tools/.selftest-gitdir"
+}
+expect_fail "a commit since the rule carries a Co-Authored-By trailer" inject_trailer_commit
+
 echo
 echo "=== positive control: an unmodified copy must still pass ==="
 reset_copy

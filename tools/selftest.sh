@@ -263,6 +263,25 @@ else
     skip "not a git checkout - exec bits NOT verified"
 fi
 
+# No commit since the rule (2026-09-01, "no co-author on this repo") may carry
+# a Co-Authored-By trailer or a "Generated with Claude Code" line. The harness
+# reminds every session to add them; Lewis's rule wins. verify-gates points
+# this at a throwaway repo through tools/.selftest-gitdir to prove it fires.
+GITDIR="$ROOT"
+[ -f "$HERE/.selftest-gitdir" ] && GITDIR=$(cat "$HERE/.selftest-gitdir")
+if command -v git >/dev/null 2>&1 && git -C "$GITDIR" rev-parse --git-dir >/dev/null 2>&1; then
+    TRAILERS=$(git -C "$GITDIR" log --since=2026-09-01 --format='%h %s%n%b%n--' 2>/dev/null \
+               | awk '/^--$/{if (bad) print hdr; bad=0; next} /^[0-9a-f]{7,} /{hdr=$0} tolower($0) ~ /^co-authored-by:|generated with \[claude/{bad=1}')
+    if [ -n "$TRAILERS" ]; then
+        fail "commits since 2026-09-01 carry a Co-Authored-By / Generated-with line (Lewis: no co-author, anywhere):"
+        printf '%s\n' "$TRAILERS" | sed 's/^/          /'
+    else
+        pass "no commit since 2026-09-01 carries a co-author or Generated-with line"
+    fi
+else
+    skip "not a git checkout - commit trailers NOT verified"
+fi
+
 # ssh inside a read loop must not eat stdin.
 if grep -q 'ssh -n ' "$HERE/drift.sh" 2>/dev/null; then
     pass "drift.sh uses ssh -n (will not swallow its own loop input)"
