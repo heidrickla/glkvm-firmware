@@ -1357,6 +1357,55 @@ change. Full report: [docs/firmware-diff-1.8.1-to-1.10.0.md](docs/firmware-diff-
 `venc_mode`, the `lt86102sxe_setup` signal hooks and drops `h264_bitrate`
 10000 → 2000; `janus.plugin.ustreamer.jcfg` acap `hw:0,0` → `multi_hdmi_input`.
 
+### The second and third units, and what a flash really keeps
+
+2026-09-08, Lewis: "can we update the other 2 kvm's now?" Both were up on
+`rmq1-1.8.1-beta1-5-g0549ea7d65` (UI: "V1.9.1 release1"), hardware
+identical to `.15` (model `rm10`, LT6911C-class bridge at `1-002b`, same
+bus layout; only serials and MACs differ). Their kvmd auth was on and the
+vaulted credential is `.15`'s post-rotation one, so both answered 403; the
+key went in the way it did on `.15` — Lewis pasted the `POST
+/api/system/ssh_key` snippet in each unit's DevTools console (the harness
+would not let me run it from his session) — then `apply-vaulted-credential.sh
+--from-vault` put the vaulted login on each, and `flash.sh --from-vault
+--check` proved the API accepted it. Their 1.8.1 updater has
+`skip_verify`, `check_image_validity`, `fwtools` and `updateEngine` like
+`.15`'s did, so the provisioned 1.10.0 image went straight on.
+
+**`.14` flashed, and came up with the vendor's empty `override.yaml`: auth
+on, no `htpasswd` at all.** The cause is GL.iNet's own upgrade flow: it
+backs up the running unit's `override.yaml`, `/etc/kvmd/user`, `/root/.ssh`,
+`/etc/shadow` and hostname into `/userdata/backup_config`, and
+`/etc/init.d/S23config` copies them back over the fresh overlay on the first
+boot, then deletes the backup. So a flash keeps the *old* unit's config, not
+the image's. `.15` had only looked right because the override it backed up
+was already ours; and our SSH key survived on `.14` only because it had been
+installed before the flash (the restore overwrites the image's
+`authorized_keys` when the old unit had a `/root/.ssh`). Recovery on `.14`
+was `provision.sh` over SSH plus the credential tool: override installed,
+patches applied, MSD functions linked, checkpoint `flashed-1.10.0`, drift
+clean. Its VNC picture checks report no signal because its host is off,
+which `selftest.sh` now skips rather than fails.
+
+**Fix in the image:** `tools/S24glkvm-config`, baked into the rootfs as
+`/etc/init.d/S24glkvm-config` (rootfs init scripts run; overlay-added ones
+do not), runs right after `S23config` and, when the live override lacks the
+marker line `glkvm-firmware: managed by tools/override.yaml.example` (now
+the first line of the example), keeps the restored file as
+`override.yaml.restored` and puts the baked copy back; it also re-adds the
+baked SSH key and the VNC hook if missing. The bake asserts the marker, the
+script's shebang and line endings, and that `S23config` still exists in the
+rootfs. `flash.sh`'s after-report now prints whether the override is ours
+and whether auth is enabled. **`.13` was the test, and passed:** flashed
+with the rebaked image (sha256 `811ccada…`, gates Valid / Signature OK),
+it came back with `override: ours (marker present)`, `auth: disabled`,
+Prometheus and MSD answering 200, the vendor's restored override parked as
+`override.yaml.restored`, and every live regression green (VNC JPEG and
+H.264 paths, zero restarts across four quality flips) — no provisioning
+step. Checkpoint `flashed-1.10.0` on both units; all three now run the
+same image. Old hostnames persist through the restore (`.14` is
+"GL-RM10-Office-Laptop", `.13` "GL-RM10-Win11Rack2").
+
 ### Correction: the classic UI on :8888 is controls-only as shipped
 
 Earlier sections call the classic PiKVM UI "live" on the strength of a 200

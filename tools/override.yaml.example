@@ -1,3 +1,6 @@
+# glkvm-firmware: managed by tools/override.yaml.example
+# (that line is the marker /etc/init.d/S24glkvm-config looks for after
+#  GL.iNet's first-boot config restore; keep it first)
 # ---------------------------------------------------------------------------
 # /etc/kvmd/override.yaml  —  GL-RM1
 #

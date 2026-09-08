@@ -48,7 +48,7 @@ ok()  { printf '  ok   %s\n' "$*"; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (file ownership inside the image)"
 [ -d "$PRISTINE/etc/kvmd" ] || die "no pristine rootfs at $PRISTINE"
-for f in uncomment-8888.awk override.yaml S99kvmd-vnc patches/MANIFEST patches/kvmd/apps/kvmd/api/export.py authorized_keys signing.pub manifest.txt; do
+for f in uncomment-8888.awk override.yaml S99kvmd-vnc S24glkvm-config patches/MANIFEST patches/kvmd/apps/kvmd/api/export.py authorized_keys signing.pub manifest.txt; do
     [ -s "$IN/$f" ] || die "missing or empty input: $IN/$f"
 done
 command -v mksquashfs >/dev/null 2>&1 || die "mksquashfs not installed"
@@ -125,6 +125,25 @@ chmod 755 "$US/S99kvmd-vnc"
 head -c 2 "$US/S99kvmd-vnc" | grep -q '#!' || die "S99kvmd-vnc has no shebang"
 ! grep -q "$(printf '\r')" "$US/S99kvmd-vnc" || die "S99kvmd-vnc has CRLF line endings - busybox would fail to exec it"
 ok "S99kvmd-vnc installed (755, LF); vnc.enable present"
+
+# ---------------------------------------------------------------- 4b. first-boot re-apply
+# GL.iNet's S23config copies the OLD unit's override.yaml, /etc/kvmd/user,
+# /root/.ssh, shadow and hostname back over the fresh overlay on the first
+# boot after a flash (from /userdata/backup_config). Measured 2026-09-08:
+# that replaced the baked override.yaml with the vendor's empty one. A rootfs
+# init script that sorts after S23 puts ours back from baked copies.
+echo ">> 4b. /etc/init.d/S24glkvm-config (re-apply after GL.iNet's restore)"
+grep -q "glkvm-firmware: managed by tools/override.yaml.example" "$OV" \
+    || die "override.yaml lacks the marker line S24glkvm-config looks for"
+cp "$IN/override.yaml" "$WORK/etc/kvmd/override.yaml.glkvm"; chmod 644 "$WORK/etc/kvmd/override.yaml.glkvm"
+cp "$IN/authorized_keys" "$WORK/etc/glkvm-authorized_key"; chmod 644 "$WORK/etc/glkvm-authorized_key"
+cp "$IN/S99kvmd-vnc" "$WORK/etc/glkvm-S99kvmd-vnc"; chmod 755 "$WORK/etc/glkvm-S99kvmd-vnc"
+cp "$IN/S24glkvm-config" "$WORK/etc/init.d/S24glkvm-config"; chmod 755 "$WORK/etc/init.d/S24glkvm-config"
+head -c 2 "$WORK/etc/init.d/S24glkvm-config" | grep -q '#!' || die "S24glkvm-config has no shebang"
+! grep -q "$(printf '\r')" "$WORK/etc/init.d/S24glkvm-config" || die "S24glkvm-config has CRLF line endings"
+[ -f "$WORK/etc/init.d/S23config" ] || die "no S23config in this rootfs - the restore mechanism changed; re-read it before baking"
+sh -n "$WORK/etc/init.d/S24glkvm-config" || die "S24glkvm-config does not parse"
+ok "S24glkvm-config installed after S23config; baked copies of override.yaml, the SSH key and the VNC hook alongside"
 
 # ---------------------------------------------------------------- 5. patches
 echo ">> 5. patched kvmd modules (every patch the manifest says applies to this image)"

@@ -1,0 +1,56 @@
+#!/bin/sh
+# S24glkvm-config - re-apply this repo's configuration after GL.iNet's own
+# first-boot restore. Baked into the ROOTFS at /etc/init.d/S24glkvm-config
+# by tools/bake-image.sh (rootfs init scripts run; overlay-added ones do not).
+#
+# WHY. GL.iNet's upgrade path backs up the running unit's /etc/kvmd/override.yaml,
+# /etc/kvmd/user, /root/.ssh, /etc/shadow and hostname into
+# /userdata/backup_config before the flash, and /etc/init.d/S23config copies
+# them back over the fresh overlay on the first boot, then deletes the backup.
+# Measured 2026-09-08 on .14: the image's override.yaml (auth off, streamer
+# forever, MSD linked, bitrate cap) was replaced by the old unit's empty
+# vendor one, and kvmd came up with auth ON and no htpasswd at all. .15 had
+# only looked right because its backed-up override was already ours.
+#
+# WHAT. Runs right after S23config (S24 sorts after S23). If the live
+# override.yaml lacks this repo's marker line, the restored one is kept as
+# override.yaml.restored and the baked copy (/etc/kvmd/override.yaml.glkvm)
+# is put in place. The baked SSH public key is appended to authorized_keys
+# if missing. The VNC autostart hook is restored if the restore dropped it.
+# Idempotent; does nothing on a unit that is already ours.
+
+MARKER="glkvm-firmware: managed by tools/override.yaml.example"
+OV=/etc/kvmd/override.yaml
+BAKED_OV=/etc/kvmd/override.yaml.glkvm
+BAKED_KEY=/etc/glkvm-authorized_key
+BAKED_VNC=/etc/glkvm-S99kvmd-vnc
+
+start() {
+    if [ -f "$BAKED_OV" ] && ! grep -q "$MARKER" "$OV" 2>/dev/null; then
+        [ -f "$OV" ] && cp -f "$OV" "$OV.restored"
+        cp -f "$BAKED_OV" "$OV"
+        echo "glkvm-config: override.yaml re-applied (GL.iNet's restore had replaced it; old copy at $OV.restored)"
+    fi
+    if [ -f "$BAKED_KEY" ]; then
+        mkdir -p /root/.ssh && chmod 700 /root/.ssh
+        if ! grep -qF "$(cat "$BAKED_KEY")" /root/.ssh/authorized_keys 2>/dev/null; then
+            cat "$BAKED_KEY" >> /root/.ssh/authorized_keys
+            chmod 600 /root/.ssh/authorized_keys
+            echo "glkvm-config: SSH key re-added"
+        fi
+    fi
+    if [ -f "$BAKED_VNC" ] && [ ! -x /etc/kvmd/user/scripts/S99kvmd-vnc ]; then
+        mkdir -p /etc/kvmd/user/scripts
+        cp -f "$BAKED_VNC" /etc/kvmd/user/scripts/S99kvmd-vnc
+        chmod 755 /etc/kvmd/user/scripts/S99kvmd-vnc
+        touch /etc/kvmd/user/vnc.enable
+        echo "glkvm-config: VNC autostart hook re-added"
+    fi
+}
+
+case "$1" in
+    start) start ;;
+    stop|restart|reload) ;;
+    *) echo "usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
+exit 0
