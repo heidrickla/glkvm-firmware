@@ -125,5 +125,12 @@ PY' || die "VERIFICATION FAILED - the two places may disagree"
 
 echo ""
 echo "  done - both places verified in sync."
-echo "  NOTE: auth is disabled on this unit (kvmd.auth.enabled: false), so the"
-echo "        credential is not exercised by the UI/API until that is reverted."
+# Say whether the credential is actually in force: an anonymous
+# /api/auth/check answers 200 only when kvmd.auth.enabled is false.
+anon=$($SSH -n 'curl -sk -m 8 -o /dev/null -w "%{http_code}" https://127.0.0.1/api/auth/check' 2>/dev/null | tr -d '\r\n')
+case "$anon" in
+    200) echo "  NOTE: auth is disabled on this unit (kvmd.auth.enabled: false), so the"
+         echo "        credential is not exercised by the UI/API until that is reverted." ;;
+    401|403) echo "  auth is enabled on this unit: the UI and API now require this credential." ;;
+    *) echo "  (could not tell whether auth is enabled: anonymous /api/auth/check gave HTTP ${anon:-none})" ;;
+esac
