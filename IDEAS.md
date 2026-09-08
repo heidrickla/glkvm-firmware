@@ -4,7 +4,8 @@ A running list of things we *could* add, compiled as we go. Anything below the
 "Done" section is still just an idea — see [FINDINGS.md](FINDINGS.md) for the
 measured detail on what has actually been built.
 
-All work so far is on `.15`. `.13` and `.14` are untouched.
+All three units run the provisioned 1.10.0 image as of 2026-09-08 (`.15`
+first; `.14` and `.13` flashed that day — FINDINGS has what a flash keeps).
 
 ---
 
