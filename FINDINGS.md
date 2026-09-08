@@ -1406,6 +1406,22 @@ step. Checkpoint `flashed-1.10.0` on both units; all three now run the
 same image. Old hostnames persist through the restore (`.14` is
 "GL-RM10-Office-Laptop", `.13` "GL-RM10-Win11Rack2").
 
+**Two things the restore carried onto `.14` that looked like firmware
+faults.** (1) Its laptop host did not re-detect the display after the
+reboot — bridge "no signal", TigerVNC black; `edid.sh default` (a hot-plug)
+brought it back in ten seconds. (2) GL.iNet's app hung at "Connecting to
+remote device… 99%" on `.14` only: the restored `/etc/kvmd/user/config.json`
+held `stream_quality: 5`, GL's **Auto** preset, which the client pushes as
+`h264_bitrate=0`; kvmd writes `/tmp/bitrate` = 0 and ustreamer switches to
+"REMB auto", sending nothing until the client's bandwidth feedback ramps —
+the 99% is the app waiting for a first frame. `.13` had preset 4
+(Lossless) and started instantly. The preset table from the Vue bundle:
+Low 500, Medium 2000, High 5000, Ultra-high 8000, Lossless 20000, Auto 0
+(kbps). Fixed live with `set_params?h264_bitrate=20000` (log: "REMB
+disabled") and persisted through GL's own `POST /api/system/set_config`
+with `stream_quality: 4`, so the app now opens `.14` like the others. Pick
+a fixed preset in the app for LAN units; Auto is for their cloud path.
+
 ### Correction: the classic UI on :8888 is controls-only as shipped
 
 Earlier sections call the classic PiKVM UI "live" on the strength of a 200
