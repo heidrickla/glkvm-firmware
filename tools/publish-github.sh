@@ -25,10 +25,12 @@
 # on the forge has not been through CI.
 #
 # FAILS LOUDLY. A leftover match for any map entry anywhere in the rewritten
-# objects is a FAIL, not a warning; so is a dropped path that survives, a map
+# objects is a FAIL, not a warning; so is a dropped path that survives, a
+# private key block anywhere in the result (whatever the map says), a map
 # line without '==>' (git filter-repo would replace that text with
 # ***REMOVED*** everywhere), an empty map, or a GitHub branch the rewrite does
 # not descend from (that needs --force, and a reason).
+# tools/verify-publish-gates.sh proves each of those checks fires.
 #
 # Map format (tools/publish/replacements.txt), one rule per line, NO comments:
 #   literal==>replacement
@@ -37,14 +39,16 @@
 # left-hand side is fed to grep -E to prove nothing survived.
 #
 # Needs git-filter-repo (pip install git-filter-repo) and ssh access to both
-# forges. PUBLISH_GITHUB_URL overrides the destination.
+# forges. PUBLISH_GITHUB_URL overrides the destination; PUBLISH_MAP and
+# PUBLISH_DROP override the two map files, which is how
+# tools/verify-publish-gates.sh injects violations and proves this goes red.
 
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-MAP="$ROOT/tools/publish/replacements.txt"
-DROP="$ROOT/tools/publish/drop-paths.txt"
+MAP="${PUBLISH_MAP:-$ROOT/tools/publish/replacements.txt}"
+DROP="${PUBLISH_DROP:-$ROOT/tools/publish/drop-paths.txt}"
 GITHUB_URL="${PUBLISH_GITHUB_URL:-git@github.com:heidrickla/$(basename "$ROOT").git}"
 
 DRY=0; FORCE=0
@@ -175,6 +179,14 @@ n=$(git -C "$SRC" log --all --format= --name-only -- tools/publish | grep -c . |
 if [ "$n" -gt 0 ]; then
     LEFT=$((LEFT + 1))
     printf 'FAIL  tools/publish/ survives in %s commit(s)\n' "$n" >&2
+fi
+# Independent of the map: no private key block may exist anywhere in the
+# published history. A key whose path was forgotten in drop-paths.txt fails
+# here instead of being published.
+n=$(grep -a -c -E -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$WORK/objects.bin" || true)
+if [ "$n" -gt 0 ]; then
+    LEFT=$((LEFT + 1))
+    printf 'FAIL  %s private key header line(s) survive in the rewritten objects\n' "$n" >&2
 fi
 [ "$LEFT" -eq 0 ] || die "$LEFT rule(s) survive the rewrite - not publishing"
 ok "no rule survives anywhere in the rewritten history ($NPUB commits, $NBYTES bytes of objects scanned)"

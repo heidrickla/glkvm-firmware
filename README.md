@@ -160,6 +160,7 @@ tools/
   rk_pack.py / rk_sign.py          rebuild and sign a firmware image
   selftest.sh / verify-gates.sh    the CI checks, and proof they can fail
   publish-github.sh                the GitHub mirror: clone the forge, scrub with tools/publish/, prove, push
+  verify-publish-gates.sh          proof the publish guard can fail: dry runs against a tampered map
   rkfw_scan.py                     inspect an RKFW container
   enable_classic_ui.sh             uncomment the :8888 server block
   S99kvmd-vnc / S99kvmd-ipmi       init scripts for the extra daemons
