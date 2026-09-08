@@ -1421,6 +1421,8 @@ Low 500, Medium 2000, High 5000, Ultra-high 8000, Lossless 20000, Auto 0
 disabled") and persisted through GL's own `POST /api/system/set_config`
 with `stream_quality: 4`, so the app now opens `.14` like the others. Pick
 a fixed preset in the app for LAN units; Auto is for their cloud path.
+`selftest.sh --with-device` now refuses a unit whose live `h264_bitrate`
+is 0 — watched red on `.13` with the rate pushed to 0, green at the cap.
 
 ### Correction: the classic UI on :8888 is controls-only as shipped
 
