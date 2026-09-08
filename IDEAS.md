@@ -239,6 +239,24 @@ Now that Prometheus works, three units on one board is a short job.
 
 ---
 
+### After a KVM reboot, a laptop host may not re-detect the display
+Measured 2026-09-08 on `.14` (host: an office laptop) after its flash: the
+bridge sat at "no signal" (`/sys/bus/i2c/devices/1-002b/resolution`), the
+streamer logged "waiting for HDMI signal", and TigerVNC showed black.
+`tools/edid.sh 192.0.2.14 default` re-presented the EDID (a hot-plug) and
+the signal was back in ten seconds at 2560×1440/60. `.13`'s desktop host
+re-detected on its own. If it recurs after any reboot: have
+`S24glkvm-config` (or a late kvmd user script) toggle the bridge once ~30 s
+after boot so laptops re-detect it without a hand on the keyboard.
+
+### An H.264 viewer gets nothing while there is no signal
+kvmd-vnc's JPEG path serves the 9.5 KB "Waiting for stream" card when the
+streamer has no frame; the H.264 memsink path just waits, so TigerVNC shows
+black with no hint (`vnc-probe.py` with encoding 50: no update at all
+within its window). Candidate: when the H.264 memsink yields no frame for a
+few seconds, raise the temporary error so the server sends the JPEG card,
+which H.264 clients render too. Needs a no-signal unit to verify red/green.
+
 ## Bigger, but the groundwork is done
 
 ### ✅ Close the source/firmware gap — done, with a caveat
