@@ -1471,6 +1471,15 @@ tool (now with a 15-call warm-up before its baseline):
 Every other process (HID workers, kvmd-vnc, ustreamer, janus, gl-pion,
 kvmd-media) was flat in every run. Applied to all three units and baked.
 
+ustreamer, which the tool cannot restart into different modes, was checked
+the other way: `.13` cycled between the 4K30 and 1080p EDIDs three times
+(six "reinit vi venc" re-initialisations, same pid) and stayed at 21–22 MB
+throughout, and 180 snapshot reads left it flat, so `.15`'s 39 MB after six
+days is bounded history (its 4K30 runs at 20 Mbit/s and full-frame OCR),
+not a per-event leak. Unmeasured: janus and gl-pion across many WebRTC
+sessions, which need a browser client to drive; their six-day figures
+(34 and 24 MB) are within a few MB of the fresh units.
+
 Noise met on the way, not a leak: every unit logs `Missing HID-touch
 device: /dev/hidg3` at boot and after a kvmd restart — the vendor config
 declares a touch HID that the gadget (hid.usb0-2 + two mass-storage
