@@ -373,6 +373,17 @@ else
             skip "no python interpreter - the VNC regressions were NOT run"
         fi
 
+        # The live H.264 rate must not be 0. GL.iNet's "Auto" preset pushes
+        # h264_bitrate=0, ustreamer goes to "REMB auto" and sends nothing until
+        # the client's bandwidth feedback ramps; their app sat at 99% on .14
+        # (2026-09-08) for exactly this. Our default is the 20000 cap.
+        _rate=$(curl -sk --max-time 10 "https://$DEVICE/api/streamer" 2>/dev/null | "$PY" -c 'import sys,json; r=json.load(sys.stdin)["result"]; print(r["params"]["h264_bitrate"])' 2>/dev/null)
+        case "$_rate" in
+            "") skip "could not read the streamer params on $DEVICE" ;;
+            0)  fail "live h264_bitrate is 0 (REMB auto) - H.264 clients wait for a first frame; set_params?h264_bitrate=20000 and fix the UI preset" ;;
+            *)  pass "live h264_bitrate is $_rate kbps (not the REMB-auto 0)" ;;
+        esac
+
         # Redfish PowerState must agree with the ATX board. Vendor glatx.py
         # hard-codes leds.power=false, which Redfish maps to "Off" while
         # /api/atx reports the board's own "on". Red on vendor code, green
