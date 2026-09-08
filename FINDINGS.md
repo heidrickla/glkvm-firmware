@@ -1424,6 +1424,58 @@ a fixed preset in the app for LAN units; Auto is for their cloud path.
 `selftest.sh --with-device` now refuses a unit whose live `h264_bitrate`
 is 0 — watched red on `.13` with the rate pushed to 0, green at the cap.
 
+### Memory: one real growth, in the OCR path, fixed; nothing else moves
+
+Lewis, 2026-09-08: "can you do a check for memory leaks?" Two instruments:
+the three units at different uptimes, and `tools/memcheck.sh <ip> [rounds]`,
+which drives the paths this repo touches (VNC sessions on both picture
+paths, snapshot polling, OCR region reads, live bitrate flips) and samples
+RSS per process before, after every round and after a settle.
+
+**Uptime comparison** (`.15` 6 d 17 h vs `.13`/`.14` ~3 h): kvmd main 58 vs
+59/63 MB, HID workers 42–43 everywhere, kvmd-vnc 40 vs 42/43, ustreamer 39
+vs 21/22 (the 1440p capture buffers vs 1080p), janus 34 vs 21/28, gl-pion 24
+vs 17/21; no OOM in any dmesg or kvmd.log; swap 4 MB. Nothing that six days
+of Home Assistant polling and viewing had inflated.
+
+**The stress run found one grower: kvmd's main process, +25 MB per round,
+kept after settling.** Isolating the phases: 20 OCR calls +70 MB (3.5 MB per
+call); 120 snapshots, 16 VNC sessions and 8 bitrate flips +0. The code
+deletes its tesseract handle after every call, so the growth is not a
+forgotten free. A standalone probe with the same libtesseract calls
+showed: single-threaded, the create/Init3/recognise/delete cycle warms up
+(+27 MB) then stays flat; from a 4-thread pool (kvmd runs recognition
+through `aiotools.run_async`) it steps up by 104 MB and again by 14; one
+initialised handle reused under a lock stays flat and runs 0.08 s per
+call against 0.62 s, because Init3 loads `eng.traineddata` every time. The
+mechanism is glibc's per-thread malloc arenas: each worker that has
+decoded a 2560×1440 frame and initialised tesseract keeps that memory in
+its own arena, and kvmd grows until every pool thread has paid it. It is
+a warm-up with a ceiling, not an unbounded leak — 40 straight calls went
+174 → 190 → 202 MB and then held 202 for the last thirty — but a 150 MB
+ceiling for one feature on a 986 MB box is worth removing.
+
+**Two changes in `patches/kvmd/apps/kvmd/ocr.py`:** one tesseract handle
+per language set, created once and reused under a lock with
+`TessBaseAPIClear` between calls; and `mallopt(M_ARENA_MAX, 2)` at import,
+before the pool exists. The probe with 8 threads settled at +127 MB with
+default arenas and +33 MB with two, same speed. Measured on `.13` with the
+tool (now with a 15-call warm-up before its baseline):
+
+| kvmd main RSS | before | round 1 | round 2 | round 3 | settled |
+| --- | --- | --- | --- | --- | --- |
+| vendor code | 153 M | 163 M | 188 M | 214 M | 215 M |
+| handle reuse only | 94 M | 123 M | 143 M | 174 M | 174 M |
+| reuse + arena cap | 106 M | 107 M | 107 M | 107 M | 107 M |
+
+Every other process (HID workers, kvmd-vnc, ustreamer, janus, gl-pion,
+kvmd-media) was flat in every run. Applied to all three units and baked.
+
+Noise met on the way, not a leak: every unit logs `Missing HID-touch
+device: /dev/hidg3` at boot and after a kvmd restart — the vendor config
+declares a touch HID that the gadget (hid.usb0-2 + two mass-storage
+functions) never creates. Harmless; keyboard and both mice are unaffected.
+
 ### Correction: the classic UI on :8888 is controls-only as shipped
 
 Earlier sections call the classic PiKVM UI "live" on the strength of a 200
