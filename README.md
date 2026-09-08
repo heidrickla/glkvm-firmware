@@ -159,6 +159,7 @@ tools/
   uncomment-8888.awk               the classic-UI enable, shared by live + bake
   rk_pack.py / rk_sign.py          rebuild and sign a firmware image
   selftest.sh / verify-gates.sh    the CI checks, and proof they can fail
+  publish-github.sh                the GitHub mirror: clone the forge, scrub with tools/publish/, prove, push
   rkfw_scan.py                     inspect an RKFW container
   enable_classic_ui.sh             uncomment the :8888 server block
   S99kvmd-vnc / S99kvmd-ipmi       init scripts for the extra daemons
@@ -185,3 +186,21 @@ shell access proved these units are **RM10**. The one to use is
 `glkvm-RM10-1.10.0-0715-1784101556.img`; `glkvm-RM10-1.10.0-custom-signed.img`
 is our own rebuild, signed with our key and accepted by the device's own
 `check_image_validity`.
+
+## GitHub mirror
+
+[github.com/heidrickla/glkvm-firmware](https://github.com/heidrickla/glkvm-firmware)
+is a scrubbed rewrite of the forge history, produced by `tools/publish-github.sh`:
+lab addresses become RFC 5737 documentation ranges, hosts get generic names, a
+captured device credential is redacted and a vendor private key from the
+firmware image is dropped. Its SHAs differ from the forge's by design. Read the
+script header before pushing anything to GitHub by hand.
+
+## License
+
+MIT for this repository's own code and documentation ([LICENSE](LICENSE)).
+Third-party material keeps its own terms: `patches/kvmd` is GL.iNet's GPLv3
+fork of PiKVM's `kvmd`, `contrib/tigervnc-windows-h264` is TigerVNC
+(GPL-2.0-or-later), `extracted/` holds configuration files from GL.iNet's
+firmware image, and `wheels/` carries prebuilt aarch64 wheels and Ubuntu arm64
+libraries under their upstream licenses.
