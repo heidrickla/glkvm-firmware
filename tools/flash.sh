@@ -208,7 +208,9 @@ $SSH -n 'printf "  version   : %s\n" "$(grep -E "^VERSION=" /etc/os-release | cu
          printf "  signing   : %s\n" "$( [ -f /etc/firmware/key/public.raw.glinet ] && echo "our key installed, vendor kept" || echo "vendor key only")"
          printf "  vnc hook  : %s\n" "$( [ -x /etc/kvmd/user/scripts/S99kvmd-vnc ] && echo present || echo MISSING)"
          printf "  tesseract : %s\n" "$(python3 -c "import ctypes; ctypes.CDLL(\"/usr/lib/libtesseract.so.5\"); print(\"loads\")" 2>&1 | tail -1)"
-         printf "  overlay   : %s free\n" "$(df -h /userdata | awk "NR==2{print \$4}")"'
+         printf "  overlay   : %s free\n" "$(df -h /userdata | awk "NR==2{print \$4}")"
+         printf "  override  : %s\n" "$(grep -q "glkvm-firmware: managed by" /etc/kvmd/override.yaml && echo "ours (marker present)" || echo "NOT OURS - GL.iNet restored the old one; run provision.sh")"
+         printf "  auth      : %s\n" "$(kvmd --dump-config 2>/dev/null | grep -A3 "^    auth:" | grep -q "enabled: false" && echo disabled || echo "enabled")"'
 for spec in "443:https://$IP/" "8888:https://$IP:8888/login/" "prometheus:https://$IP/api/export/prometheus/metrics" "msd:https://$IP/api/msd"; do
     code=$(curl -sk --max-time 15 -o /dev/null -w '%{http_code}' "${spec#*:}" 2>/dev/null || echo 000)
     printf '  %-10s HTTP %s\n' "${spec%%:*}" "$code"

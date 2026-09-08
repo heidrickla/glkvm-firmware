@@ -340,7 +340,10 @@ else
         # TigerVNC re-negotiation. Each check below was red on the vendor
         # code and is green with patches/kvmd/apps/vnc/. They need a live
         # HDMI signal and the streamer in H.264 mode.
-        if command -v "$PY" >/dev/null 2>&1; then
+        _signal=$(curl -sk --max-time 10 "https://$DEVICE/api/streamer" 2>/dev/null | "$PY" -c 'import sys,json; s=json.load(sys.stdin)["result"]["streamer"]; print("yes" if s.get("hdmi",{}).get("signal") and s["source"]["online"] else "no")' 2>/dev/null)
+        if [ "$_signal" != "yes" ]; then
+            skip "no HDMI signal on $DEVICE (streamer hdmi.signal false) - the VNC picture checks need a live host and were NOT run"
+        elif command -v "$PY" >/dev/null 2>&1; then
             _ssh() { ssh -n -i "$ROOT/.ssh-glkvm/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes \
                          -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "root@$DEVICE" "$@" 2>/dev/null; }
             _probe=$("$PY" "$HERE/vnc-probe.py" "$DEVICE" 5900 7,-26,-223,0 2>&1 | grep -E '^update' | head -3)

@@ -137,6 +137,7 @@ trap 'rm -rf "$STAGE"' EXIT INT TERM
 tr -d '\r' < "$HERE/uncomment-8888.awk"    > "$STAGE/in/uncomment-8888.awk"
 tr -d '\r' < "$HERE/override.yaml.example" > "$STAGE/in/override.yaml"
 tr -d '\r' < "$HERE/S99kvmd-vnc"           > "$STAGE/in/S99kvmd-vnc"
+tr -d '\r' < "$HERE/S24glkvm-config"       > "$STAGE/in/S24glkvm-config"
 # Every patch, plus the manifest. The remote side decides which apply to the
 # image's own firmware (it has the rootfs, so it has /etc/os-release); this
 # side does not guess. Until this change only export.py was baked, so the
