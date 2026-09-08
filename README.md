@@ -146,7 +146,7 @@ tools/
   drift.sh                         read-only diff of a unit against a checkpoint
   checkpoint.sh / restore-...      snapshot + roll back site-packages and /etc/kvmd
   bake-image.sh (+ .remote.sh)     build a signed image with provisioning inside
-  flash.sh                         flash a unit with it (irreversible; wipes the overlay)
+  flash.sh                         flash a unit with it (irreversible; wipes the overlay); --from-vault for a stock unit, --check to prove the login first
   firmware-diff.py                 what changed between two firmwares, module by module
   ocr.sh / ocr-fetch.py            tesseract on the unit; read the attached host's screen
   vnc-probe.py / vnc-churn.py      what kvmd-vnc really sends; TigerVNC's re-negotiation storm

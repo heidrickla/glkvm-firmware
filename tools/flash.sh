@@ -1,7 +1,14 @@
 #!/bin/sh
 # flash.sh - flash a Comet KVM with an image built by tools/bake-image.sh.
 #
-#   ./tools/flash.sh <device-ip> firmware/glkvm-RM10-1.10.0-provisioned.img
+#   ./tools/flash.sh <device-ip> firmware/glkvm-RM10-1.10.0-provisioned.img [--from-vault] [--check]
+#
+#   --from-vault  a STOCK unit: kvmd auth is on and it has none of our keys.
+#                 Pulls KVMD-HT-USER / KVMD-HT-PASSWORD from OpenBao (must be
+#                 THIS unit's login), sends them as headers, and installs our
+#                 SSH key through the unit's own API before the preflight.
+#   --check       stop after proving the login and reporting whether a shell
+#                 exists; changes nothing on the unit.
 #
 # THIS IS THE IRREVERSIBLE STEP. It wipes the overlay (`updateEngine --n`),
 # which is every change ever made on the running unit that is not inside the
@@ -35,6 +42,16 @@ set -eu
 
 IP="${1:-}"
 IMG="${2:-}"
+FROM_VAULT=no
+CHECK_ONLY=no
+shift 2 2>/dev/null || true
+for a in "$@"; do
+    case "$a" in
+        --from-vault) FROM_VAULT=yes ;;
+        --check)      CHECK_ONLY=yes ;;
+        *) echo "unknown option: $a" >&2; exit 1 ;;
+    esac
+done
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 KEY="$ROOT/.ssh-glkvm/id_ed25519"
@@ -49,9 +66,71 @@ echo "$IP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "'$IP' is not a bar
 SSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 root@$IP"
 API="https://$IP/api"
 
+# ---------------------------------------------------------------- credentials
+# A stock unit has kvmd authentication on and none of our keys, so every API
+# call needs the login and the preflight has no shell. --from-vault pulls
+# KVMD-HT-USER / KVMD-HT-PASSWORD from the OpenBao mirror on 192.0.2.161 via
+# `sudo openbao-get` and hands them to curl through a mode-600 config file:
+# never on argv, never in output. A leak means a rotation.
+CURLCFG=$(mktemp 2>/dev/null) || CURLCFG="${TMPDIR:-/tmp}/flash.$$"
+chmod 600 "$CURLCFG" 2>/dev/null || true
+trap 'rm -f "$CURLCFG"' EXIT INT TERM
+: > "$CURLCFG"
+HAVE_CREDS=no
+if [ "$FROM_VAULT" = "yes" ]; then
+    vget() { ssh -n -o BatchMode=yes -o ConnectTimeout=10 claude@192.0.2.161 "sudo openbao-get glkvm $1" 2>/dev/null; }
+    u=$(vget KVMD-HT-USER | tr -d '\r\n'); p=$(vget KVMD-HT-PASSWORD | tr -d '\r\n')
+    [ -n "$u" ] && [ -n "$p" ] || die "vault returned an empty KVMD-HT-USER or KVMD-HT-PASSWORD"
+    printf 'header = "X-KVMD-User: %s"\nheader = "X-KVMD-Passwd: %s"\n' "$u" "$p" > "$CURLCFG"
+    unset u p
+    HAVE_CREDS=yes
+    ok "credential loaded from the vault (user length $(sed -n 's/^header = "X-KVMD-User: \(.*\)"$/\1/p' "$CURLCFG" | tr -d '\n' | wc -c | tr -d ' '))"
+fi
+hcurl() { curl -sk -K "$CURLCFG" "$@"; }
+
+# Does the login work on this unit? 401 here means the vault holds a
+# credential for a different unit -- stop before anything else.
+code=$(hcurl --max-time 12 -o /dev/null -w '%{http_code}' "$API/auth/check" 2>/dev/null || echo 000)
+case "$code" in
+    200) ok "API accepts the request (auth disabled or the vaulted login is this unit's)" ;;
+    401|403) die "HTTP $code from $IP/api/auth/check: this unit needs its login (use --from-vault, and the vault must hold THIS unit's credential)" ;;
+    *)   die "HTTP $code from $IP/api/auth/check - is the unit up?" ;;
+esac
+
+# A stock unit does not have our SSH key. Its own API installs one:
+# POST /api/system/ssh_key with the public key as the body OVERWRITES
+# /root/.ssh/authorized_keys. Fine on a unit about to be flashed (the flash
+# wipes that overlay anyway and the image carries the same key), and it gives
+# the preflight below its shell.
+bootstrap_ssh() {
+    [ -f "$KEY.pub" ] || die "no public key at $KEY.pub"
+    resp=$(hcurl --max-time 20 -X POST --data-binary "@$KEY.pub" "$API/system/ssh_key" 2>/dev/null) || die "ssh_key request failed"
+    printf '%s' "$resp" | grep -q '"ok": *true' || die "unit refused the SSH key: $resp"
+    sleep 2
+}
+if $SSH -n true 2>/dev/null; then
+    ok "shell on $IP already (our key is installed)"
+    HAVE_SHELL=yes
+else
+    HAVE_SHELL=no
+    echo "  no shell on $IP: a stock unit; the preflight will install our SSH key through its API"
+fi
+if [ "$CHECK_ONLY" = "yes" ]; then
+    fw=$(hcurl --max-time 12 "$API/upgrade/version" 2>/dev/null | tr -d '\n' | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
+    echo "  firmware : ${fw:-unknown}"
+    echo "  --check: stopping here. Nothing on $IP was changed."
+    exit 0
+fi
+if [ "$HAVE_SHELL" = "no" ]; then
+    [ "$HAVE_CREDS" = "yes" ] || die "cannot ssh to $IP and no credential given - a stock unit needs --from-vault"
+    echo "  installing our SSH key through the API (overwrites authorized_keys) ..."
+    bootstrap_ssh
+    $SSH -n true 2>/dev/null || die "SSH key installed but ssh still fails on $IP"
+    ok "ssh bootstrapped"
+fi
+
 # ---------------------------------------------------------------- preflight
 echo "=== preflight on $IP ==="
-$SSH -n true 2>/dev/null || die "cannot ssh to $IP"
 model=$($SSH -n 'cat /proc/gl-hw-info/model 2>/dev/null' | tr -d '\r\n')
 [ "$model" = "rm10" ] || die "device reports model '$model', not rm10 - refusing"
 before=$($SSH -n 'grep -E "^VERSION=" /etc/os-release | cut -d= -f2' | tr -d '\r\n"')
@@ -85,14 +164,14 @@ sleep 5
 
 # ---------------------------------------------------------------- upload
 echo "=== upload ==="
-resp=$(curl -sk --max-time 900 -F "file=@$IMG;filename=update.img" "$API/upgrade/upload" 2>/dev/null) || die "upload request failed"
+resp=$(hcurl --max-time 900 -F "file=@$IMG;filename=update.img" "$API/upgrade/upload" 2>/dev/null) || die "upload request failed"
 up_size=$(printf '%s' "$resp" | sed -n 's/.*"size":[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
 [ "$up_size" = "$size" ] || die "device stored $up_size bytes, sent $size: $resp"
 ok "device holds /userdata/update.img, $up_size bytes"
 
 # ---------------------------------------------------------------- start
 echo "=== start (skip_verify=true: our key is not installed yet; validity still checked) ==="
-resp=$(curl -sk --max-time 120 -X POST "$API/upgrade/start?skip_verify=true" 2>/dev/null) || die "start request failed"
+resp=$(hcurl --max-time 120 -X POST "$API/upgrade/start?skip_verify=true" 2>/dev/null) || die "start request failed"
 printf '%s\n' "$resp" | sed 's/^/  /'
 printf '%s' "$resp" | grep -q '"Upgrade started"' || die "device did not start the upgrade"
 ok "upgrade started; the device reboots itself now"
