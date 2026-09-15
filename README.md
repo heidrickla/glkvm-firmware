@@ -10,15 +10,18 @@ claim tagged `[measured]` / `[source]` / `[untested]` — is in
 
 | Unit | State |
 | --- | --- |
-| `.15` | **All 10 routes done.** Classic UI, VNC, IPMI, passwordless auth, ugpio, custom signed firmware built. Survives reboot. |
-| `.13` | Untouched — **kept stock as the baseline reference** |
-| `.14` | Untouched, available |
+| `.15` | Provisioned 1.10.0 image since 2026-09-01. Lewis's desktop; the unit with the ATX board. |
+| `.13` | Same image since 2026-09-08 (host: a rack machine, 1080p). |
+| `.14` | Same image since 2026-09-08 (host: an office laptop, 1440p). |
+
+All three: classic UI, VNC with a picture, OCR, Prometheus, virtual media,
+auth off on the LAN, our SSH key, checkpointed on the image.
 
 ### Supporting machines
 
 | Host | Purpose |
 | --- | --- |
-| `glkvm-build` 192.0.2.160 | firmware repack toolchain (squashfs-tools). **Non-persistent disk** — work is discarded at power-off |
+| `glkvm-build` 192.0.2.160 | firmware repack toolchain (squashfs-tools, shellcheck). Disk persists across a power cycle (verified 2026-09-08) |
 | `glkvm-relay` 192.0.2.140 | self-hosted `glkvm-cloud` relay. Persistent disk. Web UI on 443 |
 
 Both are Ubuntu 24.04 clones of `Ubuntu-2404-template`, seeded with a NoCloud
@@ -63,8 +66,10 @@ unit). It enables:
   the classic UI, `/api/streamer/snapshot` and kvmd's OCR endpoint have a
   picture (vendor firmware never starts it).
 - **VNC** on `:5900`, autostarting across reboots. H.264 for TigerVNC ≥ 1.13
-  (keep the UI's video format on H.264; TigerVNC's Windows decoder only
-  renders it up to 1080p), JPEG for everything else; both need the two
+  (keep the UI's video format on H.264; the stock Windows TigerVNC renders it
+  only up to 1080p and shows black above that — use the patched build from
+  `contrib/tigervnc-windows-h264/`, sent upstream as TigerVNC PR #2153),
+  JPEG for everything else; both need the two
   `patches/kvmd/apps/vnc/` modules, because GL.iNet's ustreamer never writes
   the JPEG sink and their kvmd-vnc restarted the streamer on every
   re-negotiation.
@@ -120,9 +125,12 @@ Verified on-device: `check_image_validity` → `Valid`, and
 ⚠ **Bootstrap:** the *first* flash still needs `?skip_verify=true`, because the
 key currently installed on the device is GL.iNet's. After that, ours is in place.
 
-⚠ **A flash wipes the overlay** (`updateEngine` runs with `--n`), including
-`/root/.ssh/authorized_keys` — you would re-bootstrap SSH via the browser
-console afterwards.
+⚠ **A flash wipes the overlay** (`updateEngine` runs with `--n`), but
+GL.iNet's updater backs up the old unit's `override.yaml`, `/etc/kvmd/user`,
+`/root/.ssh`, shadow and hostname and restores them on the first boot. Our
+image's `S24glkvm-config` then re-applies our override, SSH key and VNC hook
+on top. Install our SSH key on a stock unit *before* flashing it
+(`flash.sh --from-vault` does, through the unit's own API).
 
 ## What does not work
 
