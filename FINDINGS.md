@@ -1784,7 +1784,15 @@ Sent upstream as [TigerVNC/tigervnc#2153](https://github.com/TigerVNC/tigervnc/p
 (rebased on master; a logging build there pinned the failure to
 `ProcessOutput()` returning `E_FAIL` on every frame; master had already
 fixed the MinGW `closesocket` clash, and the coded-size limit code was
-left out after the ablation).
+left out after the ablation). **First review round, 2026-09-15**
+(CendioOssman): decoders cannot log (threads); the `ProcessInput()`
+rewrite was a no-op, and its extra `hr` was also the Windows build
+failure (`-Werror=shadow` on the loop's own `hr`); where does the initial
+size come from. Revised: logging out, that hunk reverted, the comment
+says the constructor sizes the buffer while the MFT's output type still
+has its default 1920×1080 frame size. Regression run on this desktop with
+CI's flags: revision green, previous revision red with CI's exact error,
+master's decoder red on 1440p, restored green. `contrib/` has the series.
 
 ### The resolution ceiling, and the EDID that sets it
 
