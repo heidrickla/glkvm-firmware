@@ -1424,6 +1424,34 @@ a fixed preset in the app for LAN units; Auto is for their cloud path.
 `selftest.sh --with-device` now refuses a unit whose live `h264_bitrate`
 is 0 — watched red on `.13` with the rate pushed to 0, green at the cap.
 
+### "Black screen in TigerVNC on .14" — the stock viewer, not the unit
+
+Lewis, 2026-09-15: TigerVNC black on `.14` whenever he connects. Measured
+in this order:
+
+- The unit: HDMI signal present, streamer at 2560×1440/60, kvmd-vnc
+  serving both paths (Tight JPEG frames of 60–200 KB; Open H.264 rects).
+- `tools/vnc-h264-watch.py` (new): connects as an Open H.264 viewer and
+  prints every rect with its flags and NAL types. `.14` and `.13` behave
+  identically on the wire — first rect at 0.1 s carries SPS+PPS+IDR, then
+  ~60 rects/s, an IDR every second (GOP 60), reset flag never set. So the
+  server is not the difference.
+- The stream: `.14` is High 5.0 at 2560×1440, the same shape as `.15`;
+  ffmpeg decodes it. `.13` is 1080p.
+- This desktop has **two** `vncviewer.exe`: stock 1.16.2 in
+  `C:\Program Files\TigerVNC` (the only Start menu entry) and the patched
+  build in `%LOCALAPPDATA%\Programs\TigerVNC-h264` (no entry).
+- Side by side against `.14`: the stock build connected, kept its stats
+  overlay ticking and showed **black** (the placeholder-sized decoded
+  buffer, TigerVNC #2153); the patched build showed the laptop's desktop.
+  Lewis confirmed the picture on screen.
+
+So any 1440p or 4K unit (`.14`, `.15`) is black in the stock viewer while
+`.13` at 1080p works, which read as a unit fault. Fix on this desktop: a
+Start menu entry **"TigerVNC (H.264 1440p)"** pointing at the patched
+build with its working directory set, so its own DLLs resolve. Until the
+PR lands upstream, that entry is the one to use for the KVMs.
+
 ### Memory: one real growth, in the OCR path, fixed; nothing else moves
 
 Lewis, 2026-09-08: "can you do a check for memory leaks?" Two instruments:
