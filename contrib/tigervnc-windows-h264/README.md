@@ -88,11 +88,27 @@ height hr=0x00000000` confirms the patch is in and the MFT accepted it.
 
 Sent as [TigerVNC/tigervnc#2153](https://github.com/TigerVNC/tigervnc/pull/2153)
 from `heidrickla/tigervnc`, branch `h264-win-decoded-buffer`, rebased on
-master (commit `0b1501c`). The upstream version is smaller than the diff
-here: master had already fixed the MinGW `closesocket` clash, and the
-coded-size limit code is left out because the ablation showed it does
-nothing. With logging in place the failing call is `ProcessOutput()`
-returning `E_FAIL` (0x80004005) on every frame; that is what the PR says.
+master. After the first review round (2026-09-15) the commits are
+`342ce80` (the fix, 30 added lines) and `8e2c556` (the test). The upstream
+version is smaller than the diff here: master had already fixed the MinGW
+`closesocket` clash; the coded-size limit code is left out because the
+ablation showed it does nothing; and the review removed the logging
+(TigerVNC's decoders run on worker threads and its logger is not safe
+there) and a no-op rewrite of the `ProcessInput()` call, whose extra `hr`
+had tripped `-Werror=shadow` on CI's Windows build. With logging in place
+the failing call was `ProcessOutput()` returning `E_FAIL` (0x80004005) on
+every frame. The reviewer asked where the too-small size comes from: the
+constructor sizes the decoded buffer from the output stream info before
+any input has been seen, when the MFT's output type still carries its
+default 1920×1080 frame size (4,147,200 bytes on Windows 11); the code
+comment now says so.
+
+Regression run for the revised branch, 2026-09-15, on this desktop with
+CI's Debug `-Werror` flags under MSYS2 MinGW64 (Lewis allowed the local
+build for this): the revision builds clean and passes both tests; the
+previous revision fails with CI's exact `declaration of 'hr' shadows a
+previous local` error; master's decoder passes 1080p and fails 1440p on
+all three pixels; restored, green again.
 
 The PR's second commit is a regression test, `tests/unit/h264decoder.cxx`
 (copy here as `h264decoder-test.cxx`): it decodes an embedded flat-grey

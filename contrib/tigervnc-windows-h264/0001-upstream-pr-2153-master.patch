@@ -1,61 +1,33 @@
-From 0b1501cf82269110895d71b1536d5e807fbd9942 Mon Sep 17 00:00:00 2001
+From 342ce80343e59d2cec4860bd2f219db737b3b001 Mon Sep 17 00:00:00 2001
 From: heidrickla <lewis.heidrick@gmail.com>
 Date: Tue, 1 Sep 2026 22:44:57 -0500
 Subject: [PATCH 1/2] Size the Windows H.264 decoded buffer for the actual
  stream
 
 H264WinDecoderContext allocated decoded_buffer once, in the constructor,
-from the decoder's placeholder output type. That is enough for 1920x1088
-but not for larger streams: with a 2560x1440 stream every ProcessOutput()
-returned E_FAIL, the drain loop had no case for that result, and the
-viewer showed a black window while updates kept arriving.
+from the decoder's output stream info before any input had been seen,
+when its output type still had the default 1920x1080 frame size. That
+is enough for 1080p streams and nothing larger: with a 2560x1440 stream
+every ProcessOutput() returned E_FAIL, the drain loop had no case for
+that result, and the viewer showed a black window while updates kept
+arriving.
 
-Re-size the buffer when the decoder reports a stream change, replace the
-converter's output buffer on a stream change instead of adding a second
-one, log the two failures that were silently ignored, and stop retrying
-ProcessOutput() on an unexpected result.
+Re-size the buffer when the decoder reports a stream change, replace
+the converter's output buffer on a stream change instead of adding a
+second one, and stop retrying ProcessOutput() on an unexpected result.
 
-Verified with a replayed 2560x1440 High 5.0 stream (black before, renders
-after) and live 2560x1440@60 and 3840x2160@30 sessions against kvmd-vnc.
+Verified with a replayed 2560x1440 High 5.0 stream (black before,
+renders after) and live 2560x1440@60 and 3840x2160@30 sessions against
+kvmd-vnc.
 ---
- common/rfb/H264WinDecoderContext.cxx | 39 ++++++++++++++++++++++++++--
- 1 file changed, 37 insertions(+), 2 deletions(-)
+ common/rfb/H264WinDecoderContext.cxx | 30 ++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
 
 diff --git a/common/rfb/H264WinDecoderContext.cxx b/common/rfb/H264WinDecoderContext.cxx
-index ecfb4e5..17ddf47 100644
+index ecfb4e56..7314b830 100644
 --- a/common/rfb/H264WinDecoderContext.cxx
 +++ b/common/rfb/H264WinDecoderContext.cxx
-@@ -31,11 +31,15 @@
- 
- #include <core/i18n.h>
- 
-+#include <core/LogWriter.h>
-+
- #include <rfb/PixelBuffer.h>
- #include <rfb/H264WinDecoderContext.h>
- 
- using namespace rfb;
- 
-+static core::LogWriter vlog("H264WinDecoderContext");
-+
- // Older MinGW lacks this definition
- #ifndef HAVE_VIDEO_PROCESSOR_MFT
- static GUID CLSID_VideoProcessorMFT = { 0x88753b26, 0x5b24, 0x49bd, { 0xb2, 0xe7, 0xc, 0x44, 0x5c, 0x78, 0xc9, 0x82 } };
-@@ -161,9 +165,11 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
-   // extract actual size, including possible cropping
-   ParseSPS(h264_buffer, len);
- 
--  if (FAILED(decoder->ProcessInput(0, input_sample, 0)))
-+  HRESULT hr = decoder->ProcessInput(0, input_sample, 0);
-+  if (FAILED(hr))
-   {
--    // Silently ignore errors, hoping its a temporary encoding glitch
-+    // Hopefully a temporary encoding glitch
-+    vlog.debug("ProcessInput() failed: 0x%08lx", (unsigned long)hr);
-     return;
-   }
- 
-@@ -274,6 +280,9 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+@@ -274,6 +274,9 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
          MFT_OUTPUT_STREAM_INFO info;
          converter->GetOutputStreamInfo(0, &info);
  
@@ -65,13 +37,15 @@ index ecfb4e5..17ddf47 100644
          if (FAILED(MFCreateMemoryBuffer(info.cbSize, &converted_buffer)))
          {
            // Silently ignore errors, hoping its a temporary encoding glitch
-@@ -284,6 +293,32 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
+@@ -284,6 +287,33 @@ void H264WinDecoderContext::decode(const uint8_t* h264_buffer,
          }
        }
        output_type->Release();
 +
-+      // decoded_buffer was sized from the placeholder output type in the
-+      // constructor; the actual stream may need more (e.g. 2560x1440)
++      // The constructor sized decoded_buffer from the output stream info
++      // before any input had been seen, when the decoder's output type
++      // still had its default 1920x1080 frame size. A larger stream needs
++      // a larger buffer, or every ProcessOutput() fails.
 +      MFT_OUTPUT_STREAM_INFO decoder_info;
 +      if (SUCCEEDED(decoder->GetOutputStreamInfo(0, &decoder_info)))
 +      {
@@ -92,8 +66,7 @@ index ecfb4e5..17ddf47 100644
 +    }
 +    else
 +    {
-+      // Bail out on anything else instead of retrying
-+      vlog.error("ProcessOutput() failed: 0x%08lx", (unsigned long)hr);
++      // Retrying won't help, and would loop forever
 +      break;
      }
    }
@@ -102,7 +75,7 @@ index ecfb4e5..17ddf47 100644
 2.54.0.windows.1
 
 
-From 9e181614998a4df3023223d449c13b0bb1a1b34d Mon Sep 17 00:00:00 2001
+From 8e2c5566b0c8084d2856550287790e57f677633a Mon Sep 17 00:00:00 2001
 From: heidrickla <lewis.heidrick@gmail.com>
 Date: Tue, 1 Sep 2026 22:58:40 -0500
 Subject: [PATCH 2/2] Add a unit test for decoding H.264 frames above 1080p
@@ -118,7 +91,7 @@ black; both pass with it. The frames are under 1 KB each.
  create mode 100644 tests/unit/h264decoder.cxx
 
 diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
-index 8f7a721..3046b2c 100644
+index 8f7a7212..3046b2c5 100644
 --- a/tests/unit/CMakeLists.txt
 +++ b/tests/unit/CMakeLists.txt
 @@ -50,3 +50,9 @@ gtest_discover_tests(unicode)
@@ -133,7 +106,7 @@ index 8f7a721..3046b2c 100644
 +endif()
 diff --git a/tests/unit/h264decoder.cxx b/tests/unit/h264decoder.cxx
 new file mode 100644
-index 0000000..1a7b924
+index 00000000..1a7b9241
 --- /dev/null
 +++ b/tests/unit/h264decoder.cxx
 @@ -0,0 +1,209 @@
