@@ -1793,6 +1793,10 @@ says the constructor sizes the buffer while the MFT's output type still
 has its default 1920×1080 frame size. Regression run on this desktop with
 CI's flags: revision green, previous revision red with CI's exact error,
 master's decoder red on 1440p, restored green. `contrib/` has the series.
+Upstream CI on the revised head, once the maintainer approved the run:
+all 18 checks pass, including `build-windows`, `Unit tests (Windows)` (the
+new gtest on Media Foundation) and a `build-all-disabled` job master had
+gained since the first run.
 
 ### The resolution ceiling, and the EDID that sets it
 
