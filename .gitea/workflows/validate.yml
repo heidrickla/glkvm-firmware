@@ -47,6 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        timeout-minutes: 15
 
       # EVERYTHING IS TEED TO ci.log AND UPLOADED, PASS OR FAIL.
       #
@@ -59,6 +60,7 @@ jobs:
       # The step is written not to fail; the recorded status is re-raised at the
       # end, AFTER the upload has run.
       - name: Environment, install and selftest (captured)
+        timeout-minutes: 15
         id: run
         run: |
           set -uo pipefail
@@ -102,6 +104,7 @@ jobs:
           echo "SELFTEST_RC=$?" | tee ci.rc
 
       - name: Upload the log whatever happened
+        timeout-minutes: 15
         if: always()
         uses: actions/upload-artifact@v3
         with:
@@ -112,6 +115,7 @@ jobs:
 
       # Re-raise the real result only after the log is safely uploaded.
       - name: Fail if the selftest failed
+        timeout-minutes: 15
         if: always()
         run: |
           set -euo pipefail
@@ -128,6 +132,7 @@ jobs:
       # Run them from a workstation instead:
       #     ./tools/selftest.sh --with-device 192.0.2.15
       - name: Note what was not covered
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           echo "Hardware checks were NOT run here (no route to the KVMs from this runner)."
@@ -146,14 +151,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        timeout-minutes: 15
 
       - name: Install shellcheck and PyYAML (PINNED)
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --upgrade pip
           python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
 
       - name: Inject violations and require each to be caught
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           ./tools/verify-gates.sh
