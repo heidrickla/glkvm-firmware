@@ -102,6 +102,12 @@ Install into **`/etc/kvmd/user/scripts/`** instead. `S99custom` is in the
 read-only base image and iterates that directory at its own runtime. That is
 GL.iNet's supported extension point, and `provision.sh` uses it.
 
+## Operating notes
+
+- The unit's clock runs at UTC+6. Convert before matching `kvmd.log` lines to local time.
+- A new password on 1.10.0 needs all four character classes (`validators/auth` `valid_new_passwd`); the credential applier checks before it writes.
+- Take a checkpoint (`tools/checkpoint.sh`) after a milestone lands and is verified: the useful artefact is the known-good state to roll back to.
+
 ## Building custom firmware
 
 The whole RKFW container is decoded and we hold our own signing key, so custom
@@ -203,7 +209,7 @@ is our own rebuild, signed with our key and accepted by the device's own
 is a scrubbed rewrite of the forge history, produced by `tools/publish-github.sh`:
 lab addresses become RFC 5737 documentation ranges, hosts get generic names, a
 captured device credential is redacted and a vendor private key from the
-firmware image is dropped. Its SHAs differ from the forge's by design. Read the
+firmware image is dropped, and so are the agent instruction files (`AGENTS.md`, `CLAUDE.md`, `.claude/`). Its SHAs differ from the forge's by design. Read the
 script header before pushing anything to GitHub by hand.
 
 ## License
