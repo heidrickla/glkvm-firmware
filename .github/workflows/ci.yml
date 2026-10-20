@@ -18,18 +18,10 @@ name: CI
 #   * the tools shellcheck and pyyaml depend on are installed rather than
 #     allowed to skip
 
-# PARKED. GitHub Actions is halted on this account until the spend budget
-# resets, so the push/pull_request triggers are removed deliberately rather
-# than left to queue runs that cannot start. `.gitea/workflows/validate.yml`
-# on the self-hosted forgehost runner is the pipeline that actually gates the
-# repo in the meantime.
-#
-# TO RESTORE when GitHub is available again: put back
-#     push:
-#       branches: ["**"]
-#     pull_request:
-# alongside workflow_dispatch below.
 on:
+  push:
+    branches: ["**"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
