@@ -153,15 +153,25 @@ jobs:
       - uses: actions/checkout@v3
         timeout-minutes: 15
 
+      # The KVM runs Python 3.12.
+      - uses: actions/setup-python@v5
+        timeout-minutes: 15
+        with:
+          python-version: "3.12"
+
+      # A venv of the job's own: the image's Python is externally managed, and
+      # the runner's toolcache Python carries other repos' packages.
       - name: Install shellcheck and PyYAML (PINNED)
         timeout-minutes: 15
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet --upgrade pip
-          python3 -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet "shellcheck-py==0.10.0.1" "PyYAML==6.0.2"
 
+      # selftest finds python3 and shellcheck on PATH.
       - name: Inject violations and require each to be caught
         timeout-minutes: 15
         run: |
           set -euo pipefail
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
           ./tools/verify-gates.sh
