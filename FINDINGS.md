@@ -496,8 +496,8 @@ Built a throwaway VM rather than cluttering the desktop:
 
 | | |
 | --- | --- |
-| Name | `build-vm` (`vm-<id>`), 192.0.2.160 |
-| Template | `Ubuntu-2404-template` (`vm-<id>`) — **not** `ubuntu-2604-template` |
+| Name | build VM, 192.0.2.160 |
+| Template | `Ubuntu-2404-template` — **not** `ubuntu-2604-template` |
 | Host / datastore | 198.51.100.15 (esxi-host) |
 | Seeded by | NoCloud ISO, volume id `CIDATA`, per [[ubuntu-2404-template]] |
 | Toolchain | squashfs-tools 4.6.1 (gzip/lzo/lz4/xz/zstd/lzma), zstd, python3 |
@@ -651,13 +651,10 @@ A 28-character random password was generated and set with
 `kvmd-htpasswd set admin -i` (stdin, never on argv). `/etc/kvmd/ipmipasswd` now
 maps `admin:admin -> admin:<that password>`, mode `0600`.
 
-⚠ **Not yet vaulted.** Both on-disk OpenBao rw tokens
-(`<token-file>`, `<token-file>`) return
-**403 on every operation their own policy grants** — `read` on
-`<secret-path>`, `lookup-self`, `renew-self` — while the ro token
-succeeds over the identical SSH-to-appliance transport
-(`ttl=2374695s renewable=True policies=<ro-policy>`). Both rw copies are N-char
-`s.`-prefixed and decode cleanly from UTF-16-BOM.
+⚠ **Not yet vaulted.** Both on-disk OpenBao rw tokens return
+**403 on every operation their own policy grants** — `read` on the project's
+secret path, `lookup-self`, `renew-self` — while the ro token succeeds over
+the identical SSH-to-appliance transport.
 
 ⭐ **Two traps met on the way, both mine:** a 403 on `lookup-self` says nothing
 about validity in a hardened container, and `openbao_run.py` falls back to the
@@ -665,7 +662,7 @@ env var literally named `OPENBAO_ROOT_TOKEN` — passing `--token-env` alone can
 mean no token is sent at all, which looks exactly like a permissions failure.
 
 The password is recoverable from `/etc/kvmd/ipmipasswd` on `.15` until it is
-vaulted, so nothing is lost. Target: `<secret-path>`, key
+vaulted, so nothing is lost. Target: the vault's `glkvm` project, key
 `KVMD_ADMIN_PASSWORD` — its own project, per Lewis.
 
 ## Route 10 COMPLETE — we can build, modify AND sign firmware
@@ -707,7 +704,7 @@ that matters, vault it before powering down.
 
 ## Route 8 COMPLETE — self-hosted relay
 
-`glkvm-relay` (`vm-<id>`), **192.0.2.140**, built from `Ubuntu-2404-template`
+`glkvm-relay`, **192.0.2.140**, built from `Ubuntu-2404-template`
 exactly like the dev box (NoCloud `CIDATA` seed, PowerCLI under `ob.ps1 esxi`).
 
 | | |
