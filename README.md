@@ -156,6 +156,7 @@ tools/
   provision.sh / deprovision.sh    apply or undo the whole config, idempotent
   msd.sh                           virtual media: upload / attach / detach an ISO
   apply-module.sh                  install / revert a patched or ported kvmd module
+  apply-file.sh                    install / revert a patched firmware file from rootfs/ (vendor copy kept as .orig, base md5 checked)
   panel.sh / panel.py              draw on the front LCD in GL.iNet's own style
   drift.sh                         read-only diff of a unit against a checkpoint
   checkpoint.sh / restore-...      snapshot + roll back site-packages and /etc/kvmd
@@ -185,6 +186,10 @@ tools/
 patches/     modified kvmd modules, mirroring the site-packages tree; each
              file carries a banner saying what it changes and why; MANIFEST
              scopes each one to the firmware it applies to
+rootfs/      patched firmware files outside kvmd, mirroring the root filesystem;
+             the banner names the vendor file's md5, which apply-file.sh checks
+             before installing (usr/sbin/reset_uvc_udc: the HID files close
+             before the cable-event gadget rebind)
 contrib/     tigervnc-windows-h264/ — the TigerVNC decoder fix sent upstream as
              TigerVNC/tigervnc#2153, its regression test, and the build notes
 docs/        firmware-diff-1.8.1-to-1.10.0.md — the measured delta (credentials redacted)

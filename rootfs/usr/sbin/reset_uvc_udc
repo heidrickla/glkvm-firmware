@@ -1,0 +1,318 @@
+#!/bin/bash
+# glkvm-firmware patch (rootfs/usr/sbin/reset_uvc_udc), vendor base firmware 1.10.0 (md5 dc42bc044f48ef7c11d07fd62e5f2c57).
+# Change: after the gadget is unbound, wait until kvmd's HID children have closed /dev/hidg* before binding it
+# again. This kernel's f_hid re-initialises the cdev, list heads and spinlock embedded in struct f_hidg at every
+# bind (upstream 81ebd43cc0d6 and 7e1aa6a1e3f7 remove that); a file kept open across the rebind is no longer
+# counted and the device returns ENXIO after the next kvmd stop. The children poll the node every 0.1 s and
+# close it when it is gone, so the wait is a few hundred milliseconds.
+
+# UVC UDC 重置脚本
+# 功能：监控 USB extcon 状态，当 USB=1 时后台重启 kvmd-otg 服务
+
+# 配置变量
+EXTCON_STATE="/sys/class/extcon/extcon0/state"  # USB 状态文件路径
+SERVICE_SCRIPT="/etc/init.d/S50kvmd-otg"        # kvmd-otg 服务脚本
+UVC_SCRIPT="/etc/init.d/S99rkipc"                 # uvc 服务脚本
+LOG_TAG="reset_uvc_udc"                         # 日志标签
+INTERVAL=2                                      # 检测间隔（秒）
+LOCK_FILE="/var/run/reset_uvc_udc.lock"         # 锁文件路径
+LOCK_TIMEOUT=30                                 # 锁超时时间（秒），防止死锁
+COOLDOWN_FILE="/var/run/reset_uvc_udc.cooldown" # UDC rebind 冷却标记文件
+COOLDOWN_SECS=10                                # rebind 冷却时间（秒），防止 extcon 自触发循环
+
+# 日志函数
+# 参数：$1 - 日志消息
+log_message() {
+    logger -t "$LOG_TAG" "$1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# 检查依赖文件是否存在
+# 返回：如果依赖文件不存在则退出脚本
+check_dependencies() {
+    if [ ! -f "$EXTCON_STATE" ]; then
+        log_message "错误: 未找到 $EXTCON_STATE 文件"
+        exit 1
+    fi
+
+    if [ ! -x "$SERVICE_SCRIPT" ]; then
+        log_message "错误: 未找到 $SERVICE_SCRIPT 或文件不可执行"
+        exit 1
+    fi
+}
+
+# 清理过期的锁文件
+# 如果锁文件存在且超过超时时间，则删除
+cleanup_stale_lock() {
+    if [ -f "$LOCK_FILE" ]; then
+        LOCK_AGE=$(($(date +%s) - $(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo 0)))
+        if [ "$LOCK_AGE" -gt "$LOCK_TIMEOUT" ]; then
+            log_message "发现过期锁文件（${LOCK_AGE}秒前创建），正在清理..."
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+}
+
+# 读取 USB 连接状态
+# 返回：USB 状态值（1=连接，0=未连接）
+get_usb_state() {
+    if [ -f "$EXTCON_STATE" ]; then
+        grep "^USB=" "$EXTCON_STATE" | cut -d'=' -f2
+    else
+        echo "0"
+    fi
+}
+
+stop_service() {
+    # rkipc manages UVC hot-plug internally via uvc_control_thread.
+    # Do NOT kill rkipc on USB disconnect — it will handle reconnection automatically.
+    :
+}
+
+# True while any process holds a /dev/hidg* file open. One ls per check; a readlink per fd
+# would fork about 2000 times on this SoC.
+# shellcheck disable=SC2010
+hid_fds_held() {
+    ls -l /proc/[0-9]*/fd 2>/dev/null | grep -q "/dev/hidg"
+}
+
+# 重启 kvmd-otg 服务
+# 使用文件锁防止并发执行，避免短时间内多次重启
+# 服务将在后台重启，不阻塞主进程
+restart_service() {
+    # pgrep 守卫：若 kvmd-otgconf 正在运行，说明是 API 触发的程序化操作。
+    # 同时 touch cooldown 文件，防止 kvmd-otgconf 退出后 extcon 事件触发重入。
+    if pgrep -f "kvmd-otgconf" > /dev/null 2>&1; then
+        log_message "kvmd-otgconf 正在运行（程序化操作），touch 冷却标记并跳过"
+        touch "$COOLDOWN_FILE"
+        return 0
+    fi
+
+    # 冷却检查：若 UDC 最近刚被 rebind（本脚本或 API 路径），则跳过。
+    # 这是防止 extcon 自触发循环的核心机制：rebind → extcon USB=1 → 再次进入
+    # restart_service → 发现冷却中 → 跳过。冷却时间须大于 DWC3 完成枚举的延迟（约 4s）。
+    if [ -f "$COOLDOWN_FILE" ]; then
+        COOLDOWN_AGE=$(($(date +%s) - $(stat -c %Y "$COOLDOWN_FILE" 2>/dev/null || echo 0)))
+        if [ "$COOLDOWN_AGE" -lt "$COOLDOWN_SECS" ] && [ "$COOLDOWN_AGE" -ge 0 ]; then
+            log_message "UDC rebind 冷却中（${COOLDOWN_AGE}/${COOLDOWN_SECS}秒），跳过"
+            return 0
+        fi
+    fi
+
+    # 使用 flock 防止并发执行（两个 udev 事件同时通过冷却检查的极端情况）
+    (
+        if ! flock -n 200; then
+            log_message "服务重启已在进行中，跳过（并发保护）"
+            return 1
+        fi
+
+        GADGET_UDC="/sys/kernel/config/usb_gadget/rockchip/UDC"
+        UDC_NAME="21500000.usb"
+
+        if [ ! -f "$GADGET_UDC" ]; then
+            log_message "gadget 未就绪（$GADGET_UDC 不存在），跳过 UDC rebind"
+            return 1
+        fi
+
+        log_message "检测到物理 USB 插入，执行 full DWC3 rebind..."
+
+        # 在 rebind 前 touch 冷却文件：rebind 触发的 extcon USB=0/USB=1 事件将
+        # 在冷却检查阶段被拦截，防止自触发循环。
+        touch "$COOLDOWN_FILE"
+
+        UVC_CONFIG="/sys/kernel/config/usb_gadget/rockchip/configs/b.1/uvc.gs6"
+
+        # 关键顺序：必须先停 rkipc，再做 DWC3 driver unbind。
+        # DWC3 driver unbind 会在内核等待所有持有者关闭 UVC fd 后才返回。
+        # rkipc 持有 UVC fd；若先 unbind 再 stop rkipc，unbind 永久阻塞（实测
+        # 180s 后被 udevd SIGKILL，触发 kernel refcount use-after-free 崩溃）。
+        _UVC_WAS_ENABLED=0
+        if [ -e "$UVC_CONFIG" ]; then
+            _UVC_WAS_ENABLED=1
+            log_message "camera 已启用，先停 rkipc 释放 UVC fd，再做 DWC3 rebind..."
+            /etc/init.d/S99rkipc stop
+            sleep 0.5  # 等待 rkipc 完全退出并关闭 UVC fd
+        fi
+
+        # 完整 DWC3 driver unbind/bind（与 kvmd-otgconf 逻辑一致）。
+        # minimal rebind（仅写 UDC 文件）会使 PHY 的 BVALID/VBUS 检测失效，
+        # 导致 extcon 在第一次 rebind 后不再上报事件，第二次热插时 udev 规则不触发。
+        # 完整 unbind/bind 重新初始化 PHY，恢复 extcon 事件上报能力。
+        #
+        # 必须在 echo "" > UDC 之前取得 DWC3 路径（unbind 后 driver 软链接消失）
+        _DWC3_CURRENT=$(readlink -f "/sys/class/udc/${UDC_NAME}/device" 2>/dev/null)
+        _DWC3_NAME=""
+        _DWC3_DRV=""
+        while [ -n "$_DWC3_CURRENT" ] && [ "$_DWC3_CURRENT" != "/" ]; do
+            if [ -L "${_DWC3_CURRENT}/driver" ]; then
+                _DWC3_NAME=$(basename "$_DWC3_CURRENT")
+                _DWC3_DRV=$(readlink -f "${_DWC3_CURRENT}/driver")
+                break
+            fi
+            _DWC3_CURRENT=$(dirname "$_DWC3_CURRENT")
+        done
+
+        echo "" > "$GADGET_UDC"
+        _i=0
+        while [ "$_i" -lt 40 ] && hid_fds_held; do
+            sleep 0.05; _i=$((_i + 1))
+        done
+        if hid_fds_held; then
+            log_message "HID files still open after 2 s, binding anyway"
+        else
+            log_message "HID files closed after $((_i * 50)) ms"
+        fi
+        if [ -n "$_DWC3_NAME" ] && [ -n "$_DWC3_DRV" ]; then
+            log_message "DWC3 full rebind: unbind ${_DWC3_NAME} ..."
+            echo "$_DWC3_NAME" > "${_DWC3_DRV}/unbind" 2>/dev/null
+            _i=0
+            while [ -e "/sys/class/udc/${UDC_NAME}" ] && [ "$_i" -lt 20 ]; do
+                sleep 0.05; _i=$((_i + 1))
+            done
+            echo "$_DWC3_NAME" > "${_DWC3_DRV}/bind" 2>/dev/null
+            _i=0
+            while [ ! -e "/sys/class/udc/${UDC_NAME}" ] && [ "$_i" -lt 20 ]; do
+                sleep 0.05; _i=$((_i + 1))
+            done
+            log_message "DWC3 full rebind: bind 完成"
+        else
+            log_message "DWC3 路径未找到，fallback: sleep 0.2"
+            sleep 0.2
+        fi
+
+        echo "$UDC_NAME" > "$GADGET_UDC"
+
+        log_message "UDC rebind 完成（冷却 ${COOLDOWN_SECS}s 防止 extcon 自触发）"
+
+        # 用 setsid 启动 rkipc，使其脱离 udev 进程组/cgroup。
+        # 若在 udev 进程组内启动 rkipc，udevd 超时（180s）时会 SIGKILL 整组，
+        # 导致 rkipc 被杀、HID 无法恢复，并引发 kernel use-after-free 崩溃。
+        #
+        # 必须在内层 subshell 里先关闭 fd 200，再启动 rkipc：
+        # flock 基于 open file description 引用计数。若 rkipc/logger（通过
+        # S99rkipc start 内的 "rkipc | logger &" 后台启动）继承了 fd 200，
+        # 它们会持有同一 open file description，即使外层 subshell 退出并关闭
+        # 自己的 fd 200，flock 也不会释放（引用计数 > 0）。
+        # 结果：下次热插 flock -n 失败 → "服务重启已在进行中" → HID 不恢复。
+        # 解法：( exec 200>&-; ... ) 先关闭 fd 200，再 exec 新进程，阻断继承。
+        if [ "$_UVC_WAS_ENABLED" = "1" ]; then
+            log_message "重启 rkipc（setsid 脱离 udev 进程组，关闭 fd 200 防锁继承）..."
+            ( exec 200>&-; setsid /etc/init.d/S99rkipc start >/dev/null 2>&1 )
+            log_message "rkipc 重启完成"
+        fi
+
+        # 短暂持锁仅用于并发保护，冷却文件负责防止 extcon 循环
+        sleep 1
+        log_message "UDC rebind 流程结束"
+    ) 200>"$LOCK_FILE" &
+}
+
+# 显示使用帮助信息
+show_usage() {
+    cat <<EOF
+用法: $0 [选项]
+
+选项:
+    -o, --once          单次检查模式（默认）
+    -d, --daemon        守护进程模式（持续监控）
+    -i, --interval 秒   监控间隔秒数（默认: $INTERVAL）
+    -h, --help          显示此帮助信息
+
+示例:
+    $0 --once           # 单次检查 USB 状态
+    $0 --daemon         # 持续监控 USB 状态
+    $0 -d -i 5          # 持续监控，每5秒检查一次
+
+EOF
+}
+
+# 单次检查模式
+# 检查一次 USB 状态，如果 USB=1 则重启服务
+check_once() {
+    check_dependencies
+    cleanup_stale_lock
+
+    USB_STATE=$(get_usb_state)
+    log_message "当前 USB 状态: USB=$USB_STATE"
+
+    if [ "$USB_STATE" = "1" ]; then
+        restart_service
+    elif [ "$USB_STATE" = "0" ]; then
+        stop_service
+        log_message "USB 未连接 (USB=$USB_STATE)，无需操作"
+    fi
+}
+
+# 守护进程模式
+# 持续监控 USB 状态，当状态从 0 变为 1 时重启服务
+daemon_mode() {
+    check_dependencies
+    cleanup_stale_lock
+    log_message "启动守护进程模式 (检测间隔: ${INTERVAL}秒)"
+
+    LAST_USB_STATE=""
+
+    while true; do
+        USB_STATE=$(get_usb_state)
+
+        # 只在状态变化时记录日志
+        if [ "$USB_STATE" != "$LAST_USB_STATE" ]; then
+            log_message "USB 状态变化: $LAST_USB_STATE -> $USB_STATE"
+
+            # 当 USB 从 0 变为 1 时重启服务
+            if [ "$USB_STATE" = "1" ] && [ "$LAST_USB_STATE" = "0" ]; then
+                restart_service
+            fi
+
+            LAST_USB_STATE="$USB_STATE"
+        fi
+
+        sleep "$INTERVAL"
+    done
+}
+
+# 主函数
+# 解析命令行参数并执行相应的运行模式
+main() {
+    MODE="once"
+
+    # 解析命令行参数
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -o|--once)
+                MODE="once"
+                shift
+                ;;
+            -d|--daemon)
+                MODE="daemon"
+                shift
+                ;;
+            -i|--interval)
+                INTERVAL="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                echo "未知选项: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+
+    # 根据模式执行相应功能
+    case "$MODE" in
+        once)
+            check_once
+            ;;
+        daemon)
+            daemon_mode
+            ;;
+    esac
+}
+
+# 执行主函数
+main "$@"

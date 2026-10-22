@@ -215,6 +215,25 @@ if [ "$PATCHED" -gt 0 ]; then
         || no "kvmd will not import — revert with: $HERE/apply-module.sh $IP <patch> --revert"
 fi
 
+# Firmware files outside kvmd live under rootfs/. apply-file.sh keeps the vendor
+# copy as .orig the first time only and refuses a vendor file the patch was not
+# made from, so a new firmware fails here loudly instead of running a stale patch.
+if [ -d "$HERE/../rootfs" ]; then
+    echo "      firmware files (rootfs/)"
+    find "$HERE/../rootfs" -type f | sort > "$TMPD/rootfslist"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rel=$(printf '%s' "$f" | sed 's|.*/rootfs/|rootfs/|')
+        if out=$("$HERE/apply-file.sh" "$IP" "$rel" 2>&1 </dev/null); then
+            ok "installed $rel"
+        else
+            FAILED=$((FAILED + 1)); no "FAILED $rel"
+            printf '%s\n' "$out" | sed 's/^/          /' | head -6
+        fi
+    done < "$TMPD/rootfslist"
+    [ "$FAILED" -eq 0 ] || die "$FAILED file(s) failed to apply — the device keeps the vendor copy for those"
+fi
+
 # ---------------------------------------------------------------- 5. msd gadget
 echo
 echo "[5/5] mass-storage functions in the USB gadget"
