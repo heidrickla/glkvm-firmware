@@ -312,6 +312,82 @@ for caller in provision.sh deprovision.sh; do
     fi
 done
 
+# ---------------------------------------------------------------- downloads
+head_ "[5b] downloads are verified before use"
+
+# fetch.sh: TLS stays on and every image, fetched or already present, must
+# match SHA256SUMS. Run against file:// fakes so no network is needed.
+FETCH="$ROOT/firmware/fetch.sh"
+if [ ! -f "$FETCH" ]; then
+    fail "firmware/fetch.sh is missing"
+elif grep -nE '^[^#]*curl[^#]*( -[A-Za-z]*k[A-Za-z]* | --insecure)' "$FETCH" >"$TMPD/insecure"; then
+    fail "fetch.sh runs curl with certificate checking off:"
+    sed 's/^/          /' "$TMPD/insecure"
+else
+    pass "fetch.sh keeps curl certificate checking on"
+fi
+if [ -f "$FETCH" ] && command -v sha256sum >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+    SRCD="$TMPD/fw-src"
+    NAMES="rm10/testing/glkvm-RM10-1.10.0-0715-1784101556.img:glkvm-RM10-1.10.0-0715-1784101556.img
+rm1/testing/glkvm-RM1-1.10.0-0710-1783648193.img:glkvm-RM1-1.10.0-0710-1783648193.img
+rm1/testing/glkvm-RM1-1.7.0-1107-1762486370.img:glkvm-RM1-1.7.0-1107-1762486370.img
+rm1/release/update.img:glkvm-RM1-1.3.0-release-update.img"
+    : > "$TMPD/sums"
+    NFAKE=0
+    while IFS=: read -r rel name; do
+        mkdir -p "$SRCD/$(dirname "$rel")"
+        printf 'fake image %s\n' "$name" > "$SRCD/$rel"
+        printf '%s *%s\n' "$(sha256sum "$SRCD/$rel" | cut -d' ' -f1)" "$name" >> "$TMPD/sums"
+        NFAKE=$((NFAKE + 1))
+    done <<EOF
+$NAMES
+EOF
+    floor "fetch.sh fake images" "$NFAKE" 4
+    # fetchcase <label> <want: ok|fail> <setup command>
+    fetchcase() {
+        NFAKE=$((NFAKE + 1)); _d="$TMPD/fw-case-$NFAKE"
+        mkdir -p "$_d"; cp "$FETCH" "$_d/fetch.sh"; cp "$TMPD/sums" "$_d/SHA256SUMS"
+        ( cd "$_d" && eval "$3" )
+        if GLKVM_FW_BASE="file://$SRCD" sh "$_d/fetch.sh" >"$_d/out" 2>&1; then _rc=ok; else _rc=fail; fi
+        _stray=$(find "$_d" -name '*.part' | wc -l | tr -d ' ')
+        if [ "$_rc" = "$2" ] && [ "$_stray" -eq 0 ]; then
+            pass "fetch.sh: $1"
+        else
+            fail "fetch.sh: $1 (exit $_rc, want $2; $_stray .part left)"
+            sed 's/^/          /' "$_d/out" | tail -6
+        fi
+    }
+    fetchcase "matching images accepted" ok ":"
+    fetchcase "download not matching SHA256SUMS refused" fail \
+        "sed -i 's/^[0-9a-f]\{64\} \*glkvm-RM10/0000000000000000000000000000000000000000000000000000000000000000 *glkvm-RM10/' SHA256SUMS"
+    if [ -f "$_d/glkvm-RM10-1.10.0-0715-1784101556.img" ]; then
+        fail "fetch.sh kept an image that did not match SHA256SUMS"
+    else
+        pass "fetch.sh leaves no image behind when the hash does not match"
+    fi
+    fetchcase "image with no SHA256SUMS entry refused" fail "sed -i '/glkvm-RM1-1.7.0/d' SHA256SUMS"
+    fetchcase "tampered image already present refused" fail \
+        "printf 'substituted\n' > glkvm-RM10-1.10.0-0715-1784101556.img"
+else
+    skip "sha256sum or curl missing - fetch.sh verification NOT exercised"
+fi
+
+# bake-image.sh re-signs the vendor image with our key, so it checks the hash too.
+if grep -q 'vendor image matches SHA256SUMS' "$HERE/bake-image.sh" 2>/dev/null \
+   && grep -q '"$got" = "$want" ] || die' "$HERE/bake-image.sh"; then
+    pass "bake-image.sh checks the vendor image against SHA256SUMS before signing"
+else
+    fail "bake-image.sh no longer checks the vendor image against SHA256SUMS"
+fi
+
+# ocr-fetch.py: https, signed Release, hashed indices and debs (offline stubs).
+if command -v "$PY" >/dev/null 2>&1; then
+    try "ocr-fetch.py --selftest (signature, index and deb hash refusals)" \
+        "$PY" "$HERE/ocr-fetch.py" --selftest
+else
+    skip "no python - ocr-fetch.py --selftest NOT run"
+fi
+
 # ---------------------------------------------------------------- firmware
 head_ "[6] firmware packer"
 # Glob + case rather than `ls | grep` (SC2010): parsing ls breaks on unusual

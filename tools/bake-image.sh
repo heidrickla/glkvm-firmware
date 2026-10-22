@@ -83,6 +83,16 @@ for k in "$PRIV" "$PUB"; do
 done
 ok "inputs present; both signing keys are raw 32-byte"
 
+# VENDOR IMAGE INTEGRITY. Whatever is at $VENDOR gets re-signed with our key,
+# so it must be the image SHA256SUMS records, however it reached firmware/.
+SUMS="$ROOT/firmware/SHA256SUMS"
+[ -f "$SUMS" ] || die "missing $SUMS"
+want=$(awk -v n="$(basename "$VENDOR")" '$1 ~ /^[0-9a-f]{64}$/ { f = $2; sub(/^\*/, "", f); if (f == n) { print $1; exit } }' "$SUMS")
+[ -n "$want" ] || die "no SHA256SUMS entry for $(basename "$VENDOR")"
+got=$(sha256sum "$VENDOR" | cut -d' ' -f1)
+[ "$got" = "$want" ] || die "$(basename "$VENDOR") sha256 $got, SHA256SUMS says $want"
+ok "vendor image matches SHA256SUMS"
+
 # PRODUCT IDENTITY. The squashfs must be the rootfs partition of the RM10
 # vendor image, byte for byte. This is the check that was missing when the RM1
 # rootfs (zstd, wrong SoC, no LCD) went through every other gate and reached

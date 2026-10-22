@@ -35,9 +35,12 @@ FIRED=0
 MISSED=0
 
 reset_copy() {
-    rm -rf "$WORK/tools" "$WORK/patches"
+    rm -rf "$WORK/tools" "$WORK/patches" "$WORK/firmware"
     cp -r "$ROOT/tools" "$WORK/tools"
     [ -d "$ROOT/patches" ] && cp -r "$ROOT/patches" "$WORK/patches"
+    # fetch.sh and its hash list only; the images are gitignored and large.
+    mkdir -p "$WORK/firmware"
+    cp "$ROOT/firmware/fetch.sh" "$ROOT/firmware/SHA256SUMS" "$WORK/firmware/"
 }
 
 # expect_fail <description> ... command that breaks something ...
@@ -50,9 +53,9 @@ reset_copy() {
 expect_fail() {
     _desc="$1"; shift
     reset_copy
-    _before=$(find "$WORK/tools" "$WORK/patches" -type f 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum)
+    _before=$(find "$WORK/tools" "$WORK/patches" "$WORK/firmware" -type f 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum)
     "$@" >/dev/null 2>&1 || true
-    _after=$(find "$WORK/tools" "$WORK/patches" -type f 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum)
+    _after=$(find "$WORK/tools" "$WORK/patches" "$WORK/firmware" -type f 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum)
 
     if [ "$_before" = "$_after" ]; then
         MISSED=$((MISSED + 1))
@@ -103,6 +106,24 @@ expect_fail "override.yaml.example loses kvmd.streamer.forever" \
 # like a firmware change. selftest must refuse the example in that state.
 expect_fail "override.yaml.example gains a second top-level kvmd: block" \
     sh -c 'printf "\nkvmd:\n    streamer:\n        forever: true\n" >> "$1"' _ "$WORK/tools/override.yaml.example"
+
+# Downloads that end up re-signed with our key or baked into the image.
+expect_fail "fetch.sh turns curl certificate checking off" \
+    sed -i 's/curl -fL /curl -fkL /' "$WORK/firmware/fetch.sh"
+expect_fail "fetch.sh moves a download into place without checking its hash" \
+    sed -i 's/if verify "$2.part" "$2"; then/if true; then/' "$WORK/firmware/fetch.sh"
+expect_fail "fetch.sh trusts an image already present" \
+    sed -i 's/^        verify "$2"$/        true/' "$WORK/firmware/fetch.sh"
+expect_fail "bake-image.sh stops checking the vendor image hash" \
+    sed -i 's/ok "vendor image matches SHA256SUMS"/ok "vendor image present"/' "$WORK/tools/bake-image.sh"
+expect_fail "ocr-fetch.py goes back to plain http" \
+    sed -i 's#^MIRROR = "https://#MIRROR = "http://#' "$WORK/tools/ocr-fetch.py"
+expect_fail "ocr-fetch.py skips the Release signature" \
+    sed -i 's/^    verify_signature(release, fetch(f"{base}\/Release.gpg"))$/    pass/' "$WORK/tools/ocr-fetch.py"
+expect_fail "ocr-fetch.py stops checking Packages.gz against Release" \
+    sed -i 's/^            check_sha256(data, hashes.get(rel), url)$/            pass/' "$WORK/tools/ocr-fetch.py"
+expect_fail "ocr-fetch.py stops checking .deb hashes" \
+    sed -i 's/^    check_sha256(data, want, name)$/    pass/' "$WORK/tools/ocr-fetch.py"
 
 # A commit with a Co-Authored-By trailer must be refused. The copy has no
 # .git, so point selftest at a throwaway repo holding one such commit.
