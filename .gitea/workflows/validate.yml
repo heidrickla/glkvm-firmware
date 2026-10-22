@@ -46,7 +46,7 @@ jobs:
     name: Tooling selftest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
         timeout-minutes: 15
 
       # EVERYTHING IS TEED TO ci.log AND UPLOADED, PASS OR FAIL.
@@ -106,7 +106,7 @@ jobs:
       - name: Upload the log whatever happened
         timeout-minutes: 15
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
         with:
           name: ci-log
           path: |
@@ -150,11 +150,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
         timeout-minutes: 15
 
       # The KVM runs Python 3.12.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         timeout-minutes: 15
         with:
           python-version: "3.12"
