@@ -42,8 +42,8 @@ overlay:/overlay on / type overlay (rw,noatime,lowerdir=/,upperdir=/userdata/ove
 + cat /etc/glinet/gl-cloud.conf
 {
   "enable": false,
-  "token": "<removed>",
-  "uuid": "<removed>",
+  "token": "<redacted>",
+  "uuid": "<redacted>",
   "log_level": "INFO"
 }
 
